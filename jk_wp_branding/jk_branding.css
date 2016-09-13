@@ -1,0 +1,14 @@
+.jk-branding { padding: 0 10px; margin: 10px 0; background: #fff; border: 1px solid #ccc; }
+.jk-avatar { display: block; float: left; width: 80px; margin: 10px 10px 0 0; }
+.jk-branding p { margin: 10px 0 10px 90px; border-top: 1px solid #ddd; padding-top: 10px; padding-left: 25px; position: relative; }
+.jk-branding .dashicons { position: absolute; top: 10px; left: 0; }
+.jk-branding p.jk-thankyou { border-top: none; padding: 0; font-weight: bold; }
+
+@media (min-width: 768px) {
+	.wrap { margin-right: 260px; }
+	.wrap-inner { float: left; width: 100%; }
+	.wrap-inner .form-table { clear: left; }
+	.jk-branding { float: right; margin-top: 0; min-width: 200px; width: 200px; margin-right: -240px; }
+	.jk-branding p { margin-left: 0; }
+	.jk-thankyou:after { content: ''; display: table; clear: both; }
+}
