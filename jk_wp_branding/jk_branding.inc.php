@@ -3,7 +3,7 @@
 define('jk_BRANDING_VERSION','1.0');
 
 if (!function_exists('jk_branding')) :
-function jk_branding($product_name, $product_url = '', $notice = false, $echo = true, $plugin_or_theme = 'plugin', $donation_url = 'https://www.paypal.me/JonathanKissam/10') {
+function jk_branding($product_name, $product_url = '', $notice = false, $echo = true, $plugin_or_theme = 'plugin', $donation_url = 'http://jonathankissam.com/support') {
 	
 	if ($plugin_or_theme == 'plugin') {
 		$plugin_path = dirname(__FILE__);
@@ -28,8 +28,9 @@ function jk_branding($product_name, $product_url = '', $notice = false, $echo = 
 		__('Hi! Thank you for installing my %s theme.', 'jk_branding'),
 		$product_link
 	);
-	$donation_link = '<a href="' . $donation_url . '">' . __('Make a donation' , 'jk_branding') . '</a>';
+	$donation_link = '<a href="' . $donation_url . '">' . __('Support my work' , 'jk_branding') . '</a>';
 	$hireme_link = '<a href="http://jonathankissam.com/about">' . __('Hire me for custom Wordpress development' , 'jk_branding') . '</a>';
+	$getupdates_link = '<a href="http://eepurl.com/cabLYT">'. __('Get updates about this plugin', 'jk_branding') . '</a>';
 	if ($notice) {
 		$branding = $product_thankyou . ' ' . $donation_link . ' | ' . $hireme_link . ' &mdash; <a href="http://jonathankissam.com">Jonathan Kissam</a>';
 	} else {
@@ -43,6 +44,7 @@ function jk_branding($product_name, $product_url = '', $notice = false, $echo = 
 		<p class="jk-thankyou">$product_thankyou</p>
 		<p class="jk-donate"><span class="dashicons dashicons-thumbs-up"></span> $donation_link</p>
 		<p class="jk-hireme"><span class="dashicons dashicons-hammer"></span> $hireme_link</p>
+		<p class="jk-getupdated"><span class="dashicons dashicons-email"></span> $getupdates_link</p>
 		<p class="jk-hide"><span class="dashicons dashicons-dismiss"></span> $hide_branding_link</p>
 		</div>
 EOHTML;

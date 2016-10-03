@@ -10,6 +10,8 @@
 class ActionNetwork {
 
 	private $api_key = 'PASS_API_KEY_WHEN_INSTANTIATING_CLASS';
+	private $api_version = '2';
+	private $api_base_url = 'https://actionnetwork.org/api/v2/';
 
 	public function __construct($api_key = null) {
 		if(!extension_loaded('curl')) trigger_error('ActionNetwork requires PHP cURL', E_USER_ERROR);
@@ -18,6 +20,9 @@ class ActionNetwork {
 	}
 
 	public function call($endpoint, $method = 'GET', $object = null) {
+		
+		// if endpoint is passed as an absolute URL (i.e., if it came from an API response), remove the base URL
+		$endpoint = str_replace($this->api_base_url,'',$endpoint);
 
 		$ch = curl_init();
 		curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
@@ -36,7 +41,7 @@ class ActionNetwork {
 		} else {
 			curl_setopt($ch, CURLOPT_HTTPHEADER, array('OSDI-API-Token:'.$this->api_key));
 		}
-		curl_setopt($ch, CURLOPT_URL, 'https://actionnetwork.org/api/v2/'.$endpoint);
+		curl_setopt($ch, CURLOPT_URL, $this->api_base_url.$endpoint);
 
 		$response = curl_exec($ch);
 
@@ -57,6 +62,14 @@ class ActionNetwork {
 	public function getResourceTitle($resource) {
 		if (isset($resource->title)) { return $resource->title; }
 		if (isset($resource->name)) { return $resource->name; }
+	}
+	
+	// get embed codes
+	public function getEmbedCodes($resource, $array = false) {
+		$embed_endpoint = isset($resource->_links->{'action_network:embed'}->href) ? $resource->_links->{'action_network:embed'}->href : '';
+		if (!$embed_endpoint) { return $array ? array() : null; }
+		$embed_codes = $this->call($embed_endpoint);
+		return $array ? (array) $embed_codes : $embed_codes;
 	}
 
 	public function simplifyCollection($response, $endpoint) {
@@ -100,7 +113,61 @@ class ActionNetwork {
 		}
 	}
 
-	// get lists of petitions, events, fundraising pages, advocacy campaigns, forms and tags
+	/**
+	 * Traverse Collections
+	 *
+	 * if you are using a class that extends ActionNetwork,
+	 * this method will first test to see if $callback is a defined method
+	 * of your class. If not it will be treated as the name of a php function.
+	 *
+	 * It will be passed the following variables:
+	 * $resource : the ActionNetwork resource object
+	 * $endpoint : the endpoint passed to traverseCollection or traverseFullCollection
+	 * $index : the order of the resource in the list
+	 * $total : the total number of resources in the page or collection
+	 * $this : if an independent php function, will be passed the ActionNetwork object
+	 */
+	public function traverseCollection($endpoint, $callback) {
+		$response = $this->getCollection($endpoint);
+		$this->traverseCollectionPage($endpoint, $response, $callback);
+		return $response;
+	}
+
+	public function traverseFullCollection($endpoint, $callback) {
+		$response = $this->getCollection($endpoint);
+		$this->traverseCollectionPage($endpoint, $response, $callback);
+		if ($response->total_pages > 1) {
+			for ($page=2;$page<=$response->total_pages;$page++) {
+				$response = $this->getCollection($endpoint, $page);
+				$this->traverseCollectionPage($endpoint, $response, $callback);
+			}
+		}
+	}
+
+	private function traverseCollectionPage($endpoint, $response, $callback) {
+		if (!is_string($callback)) { return; }
+		if (method_exists($this, $callback)) {
+			$callback_method = 'object_method';
+		} else {
+			$callback_method = 'function_name';
+			if (!function_exists($callback)) { return; }
+		}
+		$osdi = 'osdi:'.$endpoint;
+		$total = $response->total_records;
+		$index = ($response->page - 1) * $response->per_page + 1;
+		if (isset($response->_embedded->$osdi)) {
+			$collection = $response->_embedded->$osdi;
+			foreach ($collection as $resource) {
+				if ($callback_method == 'object_method') {
+					$this->$callback($resource, $endpoint, $index, $total);
+				} else {
+					$callback($resource, $endpoint, $index, $total, $this);
+				}
+			}
+		}
+	}
+
+	// get simple lists (id and title) of petitions, events, fundraising pages, advocacy campaigns, forms and tags
 
 	public function getAllPetitions() {
 		return $this->getFullSimpleCollection('petitions');

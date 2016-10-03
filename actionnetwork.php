@@ -1,14 +1,14 @@
 <?php
 /*
  * @package ActionNetwork
- * @version 1.0-alpha3
+ * @version 1.0-beta
  *
  * Plugin Name: Action Network
- * Description: Integrations with Action Network (actionnetwork.org)'s API to provide action embed codes as shortcodes
+ * Description: Integrates with Action Network (actionnetwork.org)'s API to provide action embed codes as shortcodes
  * Author: Jonathan Kissam
- * Text Domain: heckle-window
+ * Text Domain: actionnetwork
  * Domain Path: /languages
- * Version: 1.0-alpha3
+ * Version: 1.0-beta
  * Author URI: http://jonathankissam.com
  */
 
@@ -21,6 +21,9 @@ if (!defined('JONATHANKISSAM_BRANDING_VERSION')) {
 if (!class_exists('ActionNetwork')) {
 	require_once( plugin_dir_path( __FILE__ ) . 'includes/actionnetwork.class.php' );
 }
+if (!class_exists('ActionNetwork_Sync')) {
+	require_once( plugin_dir_path( __FILE__ ) . 'includes/actionnetwork-sync.class.php' );
+}
 
 /**
  * Set up options
@@ -31,9 +34,9 @@ add_option( 'actionnetwork_api_key', null );
  * Installation, database setup
  */
 global $actionnetwork_version;
-$actionnetwork_version = '1.0-alpha3';
+$actionnetwork_version = '1.0-beta';
 global $actionnetwork_db_version;
-$actionnetwork_db_version = '1.0';
+$actionnetwork_db_version = '1.0.4';
 
 function actionnetwork_install() {
 
@@ -62,6 +65,11 @@ function actionnetwork_install() {
 	}
 
 	if ($installed_db_version != $actionnetwork_db_version) {
+		
+		// test for particular updates
+		if ( $installed_db_version && ($actionnetwork_db_version == '1.0.4') ) {
+			$notices[] = __('Database updated to add table actionnetwork_queue', 'actionnetwork');
+		}
 
 		$table_name = $wpdb->prefix . 'actionnetwork';
 		$charset_collate = $wpdb->get_charset_collate();
@@ -69,9 +77,13 @@ function actionnetwork_install() {
 		$sql = "CREATE TABLE $table_name (
 			wp_id mediumint(9) NOT NULL AUTO_INCREMENT,
 			an_id varchar(64) DEFAULT '' NOT NULL,
-			type varchar(16) DEFAULT '' NOT NULL, 
+			type varchar(24) DEFAULT '' NOT NULL, 
 			name varchar(255) DEFAULT '' NOT NULL,
 			title varchar (255) DEFAULT '' NOT NULL,
+			created_date bigint DEFAULT NULL,
+			modified_date bigint DEFAULT NULL,
+			start_date bigint DEFAULT NULL,
+			browser_url varchar(255) DEFAULT '' NOT NULL,
 			embed_standard_default_styles text NOT NULL,
 			embed_standard_layout_only_styles text NOT NULL,
 			embed_standard_no_styles text NOT NULL,
@@ -81,12 +93,27 @@ function actionnetwork_install() {
 			enabled tinyint(1) DEFAULT 0 NOT NULL,
 			PRIMARY KEY  (wp_id)
 		) $charset_collate;";
+		
+		$table_name_queue = $wpdb->prefix . 'actionnetwork_queue';
+		$sql_queue = "CREATE TABLE $table_name_queue (
+			resource_id bigint(2) NOT NULL AUTO_INCREMENT,
+			resource text NOT NULL,
+			endpoint varchar(255) DEFAULT '' NOT NULL,
+			processed tinyint(1) DEFAULT 0 NOT NULL,
+			PRIMARY KEY  (resource_id)
+		) $charset_collate;";
 
 		require_once( ABSPATH . 'wp-admin/includes/upgrade.php' );
+		
 		dbDelta( $sql );
+		dbDelta( $sql_queue );
 
 		update_option( 'actionnetwork_db_version', $actionnetwork_db_version );
 
+	}
+	
+	if ( !wp_next_scheduled( 'actionnetwork_cron_daily' ) ) {
+		wp_schedule_event( time(), 'daily', 'actionnetwork_cron_daily' );
 	}
 
 	update_option('actionnetwork_deferred_admin_notices', $notices);
@@ -118,6 +145,9 @@ function actionnetwork_uninstall() {
 		'actionnetwork_db_version',
 		'actionnetwork_deferred_admin_notices',
 		'actionnetwork_api_key',
+		'actionnetwork_cache_timestamp',
+		'actionnetwork_queue_status',
+		'actionnetwork_cron_token',
 	);
 	foreach ($actionnetwork_options as $option) {
 		delete_option( $option );
@@ -145,8 +175,9 @@ add_action( 'admin_notices', 'actionnetwork_admin_notices' );
 
 /**
  * Shortcode
- * Since Action Network's embed codes share a unique ID,
- * only allow the first shortcode on a given page
+ * Since the way Action Network's embed codes work
+ * does not support multiple embeds on a single page,
+ * only allow the first shortcode on a given page load
  */
 global $actionnetwork_shortcode_count;
 $actionnetwork_shortcode_count = 0;
@@ -197,7 +228,7 @@ add_shortcode( 'actionnetwork', 'actionnetwork_shortcode' );
  * https://developer.wordpress.org/reference/functions/add_menu_page/
  */
 function actionnetwork_admin_menu() {
-	$actionnetwork_admin_menu_hook = add_menu_page( __('Administer Action Network', 'actionnetwork'), 'Action Network', 'manage_options', 'actionnetwork', 'actionnetwork_admin_page', 'dashicons-megaphone', 21);
+	$actionnetwork_admin_menu_hook = add_menu_page( __('Administer Action Network', 'actionnetwork'), 'Action Network', 'manage_options', 'actionnetwork', 'actionnetwork_admin_page', plugins_url('icon-action-network.png', __FILE__), 21);
 	// add_action( 'load-' . $actionnetwork_admin_menu_hook, 'actionnetwork_admin_add_help' );
 	/*
 	// customize the first sub-menu link
@@ -208,9 +239,105 @@ function actionnetwork_admin_menu() {
 add_action( 'admin_menu', 'actionnetwork_admin_menu' );
 
 /**
- * Handle administrative actions
+ * Update sync daily via cron
  */
-function actionnetwork_admin_handle_actions(){
+function actionnetwork_cron_sync() {
+
+	// initiate a background process by making a call to the "ajax" URL
+	$ajax_url = admin_url( 'admin-ajax.php' );
+
+	// since we're making this call from the server, we can't use a nonce
+	// because the user id could be different. so create a token
+	$timeint = time() / mt_rand( 1, 10 ) * mt_rand( 1, 10 );
+	$timestr = (string) $timeint;
+	$token = md5( $timestr );
+	update_option( 'actionnetwork_ajax_token', $token );
+
+	$body = array(
+		'action' => 'actionnetwork_process_queue',
+		'queue_action' => 'init',
+		'token' => $token,
+	);
+	$args = array( 'body' => $body, 'timeout' => 1 );
+	wp_remote_post( $ajax_url, $args );
+
+}
+add_action( 'actionnetwork_cron_daily', 'actionnetwork_cron_sync' );
+
+/**
+ * Process ajax requests
+ */
+function actionnetwork_process_queue(){
+	
+	// Don't lock up other requests while processing
+	session_write_close();
+
+	// check token
+	$token = isset($_REQUEST['token']) ? $_REQUEST['token'] : 'no token';
+	$stored_token = get_option( 'actionnetwork_ajax_token', '' );
+	if ($token != $stored_token) { wp_die(); }
+	delete_option( 'actionnetwork_ajax_token' );
+	
+	$queue_action = isset($_REQUEST['queue_action']) ? $_REQUEST['queue_action'] : '';
+	$updated = isset($_REQUEST['updated']) ? $_REQUEST['updated'] : 0;
+	$inserted = isset($_REQUEST['inserted']) ? $_REQUEST['inserted'] : 0;
+	$status = get_option( 'actionnetwork_queue_status', 'empty' );
+
+	// otherwise delete the ajax token
+	
+	// only do something if status is empty & queue_action is init,
+	// or status is processing and queue_action is continue
+	if (
+			( ($queue_action == 'init') && ($status == 'empty') )
+			|| ( ($queue_action == 'continue') && ($status == 'processing') )
+		) {
+	
+		$sync = new Actionnetwork_Sync();
+		$sync->updated = $updated;
+		$sync->inserted = $inserted;
+		if ($queue_action == 'init') { $sync->init(); }
+		$sync->processQueue();
+	
+	}
+	
+	wp_die();
+}
+add_action( 'wp_ajax_actionnetwork_process_queue', 'actionnetwork_process_queue' );
+add_action( 'wp_ajax_nopriv_actionnetwork_process_queue', 'actionnetwork_process_queue' );
+
+function actionnetwork_get_queue_status(){
+	check_ajax_referer( 'actionnetwork_get_queue_status', 'actionnetwork_ajax_nonce' );
+	$sync = new Actionnetwork_Sync();
+	$status = $sync->getQueueStatus();
+	$status['text'] = __('API Sync queue is '.$status['status'].'.', 'actionnetwork');
+	if ($status['status'] == 'processing') {
+		$status['text'] .= ' ' . __(
+			/* translators: first %d is number of items processed, second %d is total number of items in queue */
+			sprintf('%d of %d items processed.', $status['processed'], $status['total'])
+		);
+	}
+	
+	// if status is "complete" or "empty," check if an admin notice has been set;
+	// if it has, return the admin notice as status.text & clear in options
+	if ( ($status['status'] == 'complete') || ($status['status'] == 'empty') ) {
+		$notices = get_option('actionnetwork_deferred_admin_notices', array());
+		if (isset($notices['api_sync_completed'])) {
+			$status['text'] = $notices['api_sync_completed'];
+			$status['status'] = 'complete';
+			// unset($notices['api_sync_completed']);
+			// update_option('actionnetwork_deferred_admin_notices', $notices);
+		}
+	}
+	
+	wp_send_json($status);
+	wp_die();
+}
+add_action( 'wp_ajax_actionnetwork_get_queue_status', 'actionnetwork_get_queue_status' );
+
+/**
+ * Helper function to handle administrative actions
+ */
+function _actionnetwork_admin_handle_actions(){
 
 	global $wpdb;
 	
@@ -223,16 +350,66 @@ function actionnetwork_admin_handle_actions(){
 	switch ($_REQUEST['actionnetwork_admin_action']) {
 	
 		case 'update_api_key':
+		
+		// TODO: clean this value!
 		$actionnetwork_api_key = $_REQUEST['actionnetwork_api_key'];
+		$queue_status = get_option( 'actionnetwork_queue_status', 'empty' );
+		
 		if (get_option('actionnetwork_api_key', null) !== $actionnetwork_api_key) {
-			update_option('actionnetwork_api_key', $actionnetwork_api_key);
+			
+			// don't allow API Key to be changed if a sync queue is processing
+			if ($queue_status != 'empty') {
+				$return['notices']['error'] = __( 'Cannot change API key while a sync queue is processing', 'actionnetwork' );
+			} else {
+			
+				update_option('actionnetwork_api_key', $actionnetwork_api_key);
+				update_option('actionnetwork_cache_timestamp', 0);
+				$deleted = $wpdb->query("DELETE FROM {$wpdb->prefix}actionnetwork WHERE an_id != ''");
 
-			$deleted = $wpdb->query("DELETE FROM {$wpdb->prefix}actionnetwork WHERE an_id != ''");
-
-			$return['notices']['updated'][] = $deleted ? __('API key has been updated and actions synced via API have been removed', 'actionnetwork') : __('API key has been updated', 'actionnetwork');
-
-			// TODO: sync new actions
+				if ($actionnetwork_api_key) {
+					$return['notices']['updated'][] = $deleted ? __('API key has been updated and actions synced via previous API key have been removed', 'actionnetwork') : __('API key has been updated', 'actionnetwork');
+				} else {
+					$return['notices']['updated'][] = $deleted ? __('API key and actions synced via API have been removed', 'actionnetwork') : __('API key has been removed', 'actionnetwork');
+				}
+			
+			}
 		}
+		break;
+
+		case 'update_sync':
+
+			// error_log( 'actionnetwork_admin_action=update_sync called', 0 );
+		
+			$queue_status = get_option( 'actionnetwork_queue_status', 'empty' );
+			if ($queue_status != 'empty') {
+				$return['notices']['error'][] = __( 'Sync currently in progress', 'actionnetwork' );
+			} else {
+		
+				// initiate a background process by making a call to the "ajax" URL
+				$ajax_url = admin_url( 'admin-ajax.php' );
+
+				// since we're making this call from the server, we can't use a nonce
+				// because the user id would be different. so create a token
+				$timeint = time() / mt_rand( 1, 10 ) * mt_rand( 1, 10 );
+				$timestr = (string) $timeint;
+				$token = md5( $timestr );
+				update_option( 'actionnetwork_ajax_token', $token );
+
+				$body = array(
+					'action' => 'actionnetwork_process_queue',
+					'queue_action' => 'init',
+					'token' => $token,
+				);
+				$args = array( 'body' => $body, 'timeout' => 1 );
+				wp_remote_post( $ajax_url, $args );
+				// error_log( "wp_remote_post url called: $ajax_url, args:\n\n".print_r($args,1), 0 );
+				$return['notices']['updated']['sync-started'] = __( 'Sync started', 'actionnetwork' );
+				$queue_status = 'processing';
+				
+			}
+			
+			$return['queue_status'] = $queue_status;
+			
 		break;
 		
 		case 'add_embed':
@@ -245,6 +422,7 @@ function actionnetwork_admin_handle_actions(){
 
 		$embed_style = $embed_style_matched ? ( isset($embed_style_matches[0][1]) && $embed_style_matches[0][1] ? 'layout_only' : 'default' ) : 'no';
 		$embed_type = isset($embed_script_matches[0][1]) ? $embed_script_matches[0][1] : '';
+		if ($embed_type == 'letter') { $embed_type = 'advocacy_campaign'; }
 		$embed_size = isset($embed_script_matches[0][3]) && $embed_script_matches[0][3] ? 'full' : 'standard';
 
 		if (!$embed_title) {
@@ -267,19 +445,27 @@ function actionnetwork_admin_handle_actions(){
 			$table_name = $wpdb->prefix . 'actionnetwork';
 			$embed_field_name = 'embed_'.$embed_size.'_'.$embed_style.'_styles';
 
-			$wpdb->insert($table_name, array(
+			$data = array(
 				'type' => $embed_type,
-				'name' => $embed_title,
 				'title' => $embed_title,
 				$embed_field_name => $embed_code,
 				'enabled' => 1,
-			), array ( '%s', '%s', '%s', '%s', '%d' ) );
-			$shortcode = "[actionnetwork id=".$wpdb->insert_id."]";
+				'created_date' => time(),
+				'modified_date' => time(),
+			);
+
+			$wpdb->insert($table_name, $data, array ( '%s', '%s', '%s', '%d', '%d', '%d' ) );
+			$__copy = __('Copy', 'actionnetwork');
+			$shortcode_copy = <<<EOHTML
+<span class="copy-wrapper">
+<input type="text" class="copy-text" readonly="readonly" id="shortcode-new-{$wpdb->insert_id}" value="[actionnetwork id={$wpdb->insert_id}]" /><button data-copytarget="#shortcode-new-{$wpdb->insert_id}" class="copy">$__copy</button>
+</span>
+EOHTML;
 
 			$return['notices']['updated'][] = sprintf(
 				/* translators: %s: The shortcode for the saved embed code */
 				__('Embed code saved to your actions. Shortcode: %s', 'actionnetwork'),
-				'<code>'.$shortcode.'</code>'
+				$shortcode_copy
 			);
 
 			$return['actionnetwork_add_embed_title'] = '';
@@ -299,6 +485,11 @@ function actionnetwork_admin_handle_actions(){
  */
 function actionnetwork_admin_page() {
 
+	global $actionnetwork_version;
+	
+	// defines Actionnetwork_Action_List class, which extends WP_List_Table
+	require_once( plugin_dir_path( __FILE__ ) . 'includes/actionnetwork-action-list.class.php' );
+
 	// load scripts and stylesheets
 	wp_enqueue_style( 'actionnetwork-admin-css', plugins_url('admin.css', __FILE__) );
 	wp_register_script( 'actionnetwork-admin-js', plugins_url('admin.js', __FILE__) );
@@ -307,8 +498,11 @@ function actionnetwork_admin_page() {
 	$translation_array = array(
 		'copied' => __( 'Copied!', 'actionnetwork' ),
 		'pressCtrlCToCopy' => __( 'please press Ctrl/Cmd+C to copy', 'actionnetwork' ),
+		'clearResults' => __( 'clear results', 'actionnetwork' ),
 		'changeAPIKey' => __( 'Change or delete API key', 'actionnetwork' ),
 		'confirmChangeAPIKey' => __( 'Are you sure you want to change or delete the API key? Doing so means any actions you have synced via the API will be deleted.', 'actionnetwork' ),
+		/* translators: %s: date of last sync */
+		'lastSynced' => __( 'Last synced %s', 'actionnetwork' ),
 	);
 	wp_localize_script( 'actionnetwork-admin-js', 'actionnetworkText', $translation_array );
 	wp_enqueue_script( 'actionnetwork-admin-js' );
@@ -318,42 +512,89 @@ function actionnetwork_admin_page() {
 
 	// This handles form submissions and prints any relevant notices from them
 	$notices_html = '';
+	$action_returns = array();
 	if (isset($_REQUEST['actionnetwork_admin_action'])) {
-		$action_returns = actionnetwork_admin_handle_actions();
+		$action_returns = _actionnetwork_admin_handle_actions();
 		if (isset($action_returns['notices'])) {
-			foreach ($action_returns['notices']['error'] as $notice) {
-				$notices_html .= '<div class="error notice is-dismissible"><p>'.$notice.'</p></div>';
+			if (isset($action_returns['notices']['error']) && is_array($action_returns['notices']['error'])) {
+				foreach ($action_returns['notices']['error'] as $index => $notice) {
+					$notices_html .= '<div class="error notice is-dismissible" id="actionnetwork-error-notice-'.$index.'"><p>'.$notice.'</p></div>';
+				}
 			}
-			foreach ($action_returns['notices']['updated'] as $notice) {
-				$notices_html .= '<div class="updated notice is-dismissible"><p>'.$notice.'</p></div>';
+			if (isset($action_returns['notices']['updated']) && is_array($action_returns['notices']['updated'])) {
+				foreach ($action_returns['notices']['updated'] as $index => $notice) {
+					$notices_html .= '<div class="updated notice is-dismissible" id="actionnetwork-update-notice-'.$index.'"><p>'.$notice.'</p></div>';
+				}
 			}
 
 		}
 		if (isset($action_returns['tab'])) { $tab = $action_returns['tab']; }
 	}
 
-	// This handles this list
+	// This prepares this list
 	$action_list = new Actionnetwork_Action_List();
 	$action_list->prepare_items();
 	if (isset($action_list->notices)) {
-		foreach ($action_list->notices['error'] as $notice) {
-			$notices_html .= '<div class="error notice is-dismissible"><p>'.$notice.'</p></div>';
+		foreach ($action_list->notices['error'] as $index->$notice) {
+			$notices_html .= '<div class="error notice is-dismissible" id="actionnetwork-list-error-notice-'.$index.'"><p>'.$notice.'</p></div>';
 		}
-		foreach ($action_list->notices['updated'] as $notice) {
-			$notices_html .= '<div class="updated notice is-dismissible"><p>'.$notice.'</p></div>';
+		foreach ($action_list->notices['updated'] as $index->$notice) {
+			$notices_html .= '<div class="updated notice is-dismissible" id="actionnetwork-list-update-notice-'.$index.'"><p>'.$notice.'</p></div>';
 		}
 	}
+
+	// get API Key
+	$actionnetwork_api_key = get_option('actionnetwork_api_key');
 	
+	// get queue status - allow action_returns to override the option because
+	// we've started the queue processing in a separate process, which might not
+	// have reset the option yet
+	$queue_status = isset($action_returns['queue_status']) ? $action_returns['queue_status'] : get_option('actionnetwork_queue_status', 'empty');
 
 	?>
 	
 	<div class='wrap'>
 		
-		<h1>Action Network</h1>
+		<h1><img src="<?php echo plugins_url('logo-action-network.png', __FILE__); ?>" /> Action Network
+			<?php if (strpos($actionnetwork_version,'beta')): ?>
+				<span class="subtitle">BETA</span>
+			<?php endif; ?>
+		</h1>
 		
 		<div class="wrap-inner">
 
 			<?php if ($notices_html) { echo $notices_html; } ?>
+
+				<?php if ($actionnetwork_api_key) : ?>
+				<form method="post" action="" id="actionnetwork-update-sync" class="alignright">
+					<?php
+						// nonce field for form submission
+						wp_nonce_field( 'actionnetwork_update_sync', 'actionnetwork_nonce_field' );
+						
+						// nonce field for ajax requests
+						wp_nonce_field( 'actionnetwork_get_queue_status', 'actionnetwork_ajax_nonce', false );
+					?>
+					<input type="hidden" name="actionnetwork_admin_action" value="update_sync" />
+					<input type="submit" id="actionnetwork-update-sync-submit" class="button" value="<?php _e('Update API Sync', 'actionnetwork'); ?>" <?php
+						// if we're currently processing a queue, disable this button
+						if ($queue_status == 'processing') { echo 'disabled="disabled" ';}
+					?>/>
+					<div class="last-sync"><?php
+						$last_updated = get_option('actionnetwork_cache_timestamp', 0);
+						if ($queue_status == 'processing') {
+							_e('API Sync queue is processing');
+						} elseif ($last_updated) {
+							printf(
+								/* translators: %s: date of last sync */
+								__('Last synced %s', 'actionnetwork'),
+								date('n/j/Y g:ia', $last_updated)
+							);
+						} else {
+							_e('This API key has not been synced', 'actionnetwork');
+						}
+					?></div>
+				</form>
+				<?php endif; ?>
 			
 			<h2 class="nav-tab-wrapper">
 				<a href="#actionnetwork-actions" class="nav-tab<?php echo ($tab == 'actions') ? ' nav-tab-active' : ''; ?>">
@@ -369,9 +610,32 @@ function actionnetwork_admin_page() {
 			
 			<?php /* list actions */ ?>
 			<div class="actionnetwork-admin-tab<?php echo ($tab == 'actions') ? ' actionnetwork-admin-tab-active' : ''; ?>" id="actionnetwork-actions">
-				<h2><?php _e('Your Actions', 'actionnetwork'); ?></h2>
+				<h2>
+					<?php _e('Your Actions', 'actionnetwork'); ?>
+					<?php if (isset($_REQUEST['search']) && $_REQUEST['search']) {
+						echo '<span class="subtitle search-results-title">';
+						/* translators: %s: the term being searched for */
+						printf( __('Search results for "%s"', 'actionnetwork'),  $_REQUEST['search'] );
+						echo '</span>';
+					} ?>
+				</h2>
+
+				<?php
+					$searchtype = isset($_REQUEST['type']) && isset($action_list->action_type_plurals[$_REQUEST['type']]) ? $action_list->action_type_plurals[$_REQUEST['type']] : __('Actions', 'actionnetwork');
+					$searchtext = sprintf(
+						/* translators: %s: "actions", or plural of action type, which will be searched) */
+						__('Search %s', 'actionnetwork'),
+						$searchtype
+					);
+				?>
+
 				<form id="actionnetwork-actions-filter" method="get">
 					<input type="hidden" name="page" value="<?php echo $_REQUEST['page'] ?>" />
+					<p class="search-box">
+						<label class="screen-reader-text" for="action-search-input"><?php echo $searchtext; ?>:</label>					
+						<input type="search" id="action-search-input" name="search" value="<?php echo isset($_REQUEST['search']) ? $_REQUEST['search'] : '' ?>" placeholder="<?php _e('Search','actionnetwork'); ?>" />
+						<input type="submit" id="action-search-submit" class="button" value="<?php echo $searchtext; ?>">
+					</p>
 					<?php $action_list->display(); ?>
 				</form>
 			</div>
@@ -418,7 +682,6 @@ function actionnetwork_admin_page() {
 				<h2><?php _e('Plugin Settings', 'actionnetwork'); ?></h2>
 				<form method="post" action="">
 					<?php
-						$actionnetwork_api_key = get_option('actionnetwork_api_key');
 						wp_nonce_field( 'actionnetwork_update_api_key', 'actionnetwork_nonce_field' );
 					?>
 					<input type="hidden" name="actionnetwork_admin_action" value="update_api_key" />
@@ -451,8 +714,8 @@ function actionnetwork_admin_add_help() {
 	$screen = get_current_screen();
 	
 	$screen->add_help_tab( array(
-		'id'       => 'actionnetwork-help-1',
-		'title'    => __( 'Help Tab 1', 'actionnetwork' ),
+		'id'       => 'actionnetwork-help-overview',
+		'title'    => __( 'Overview', 'actionnetwork' ),
 		'content'  => __('
 <p>Placeholder for documentation</p>
 		', 'actionnetwork'),
@@ -460,273 +723,168 @@ function actionnetwork_admin_add_help() {
 }
 
 /**
- * Load actions from API
+ * Sync actions from API - should be able to remove everything below here if the Actionnetwork_Sync class works
  */
-function _actionnetwork_load_actions(){
+global $actionnetwork_sync_report;
+$actionnetwork_sync_report = array(
+	'updated' => 0,
+	'inserted' => 0,
+	'deleted' => 0,
+);
+function _actionnetwork_sync_actions(){
+
+	global $wpdb;
+	global $actionnetwork_sync_report;
+
 	if ($actionnetwork_api_key = get_option('actionnetwork_api_key')) {
-		// make call
-		if ($success) {
-			// delete all database entries with an_id not null or empty
-			// then load into database
-			// and update cache timestamp
-			if (get_option('actionnetwork_cache_timestamp')) {
-				update_option('actionnetwork_cache_timestamp', time());
-			} else {
-				add_option('actionnetwork_cache_timestamp', time(), '', 'no'); // TODO: look at add_option documentation to figure out last two values
-			}
+
+		$actionnetwork_sync_report = array(
+			'updated' => 0,
+			'inserted' => 0,
+			'deleted' => 0,
+		);
+
+		// load all the content into simple id => title arrays
+		$actionnetwork = new ActionNetwork($actionnetwork_api_key);
+
+		// mark all existing API-synced actions for deletion (any that are still synced will be un-marked)
+		$wpdb->query("UPDATE {$wpdb->prefix}actionnetwork SET enabled=-1 WHERE an_id != ''");
+
+		$endpoints = array( 'petitions', 'events', 'fundraising_pages', 'advocacy_campaigns', 'forms' );
+		foreach ($endpoints as $endpoint) {
+			$actionnetwork->traverseFullCollection( $endpoint, '_actionnetwork_process_api_response' );
 		}
+		// TODO: initiate batch processor here...
+
+		// now remove all API-synced action that are still marked for deletion
+		$actionnetwork_sync_report['deleted'] = $wpdb->query("DELETE FROM {$wpdb->prefix}actionnetwork WHERE an_id != '' AND enabled=-1");
+
+		// update synced timestamp
+		update_option('actionnetwork_cache_timestamp', time());
+
+		// return a notice that sync has been completed, report number of updated/inserted/deleted actions
+		return sprintf(
+			/* translators: 1: Number of updated actions, 2: Number of inserted actions, 3: Number of deleted actions */
+			__('API sync has been completed. Updated: %1$d. Inserted: %2$d. Deleted: %3$d.', 'actionnetwork'),
+			$actionnetwork_sync_report['updated'],
+			$actionnetwork_sync_report['inserted'],
+			$actionnetwork_sync_report['deleted']
+		);
 	}
 }
 
-/**
- * Create WP_List_Table for actions
- */
-if ( ! class_exists( 'WP_List_Table' ) ) {
-	require_once( ABSPATH . 'wp-admin/includes/class-wp-list-table.php' );
-}
-class Actionnetwork_Action_List extends WP_List_Table {
-
-	// Notices
-	public $notices = array();
-	public $action_types = array();
-	public $action_type_plurals = array();
-
-	// Class constructor
-	function __construct() {
-
-		parent::__construct( array(
-			'singular' => __( 'Action', 'actionnetwork' ),
-			'plural' => __( 'Actions', 'actionnetwork' ),
-			'ajax' => false,
-		) );
-
-		$this->notices = array(
-			'error' => array(),
-			'updated' => array(),
-		);
-
-		$this->action_types = array(
-			'petition' => __( 'Petition', 'actionnetwork' ),
-			'advocacy_campaign' => __( 'Advocacy Campaign', 'actionnetwork' ),
-			'event' => __( 'Event', 'actionnetwork' ),
-			'ticketed_event' => __( 'Ticketed Event', 'actionnetwork' ),
-			'fundraising_page' => __( 'Fundraising Page', 'actionnetwork' ),
-			'form' => __( 'Form', 'actionnetwork' ),
-		);
-		$this->action_type_plurals = array(
-			'petition' => __( 'Petitions', 'actionnetwork' ),
-			'advocacy_campaign' => __( 'Advocacy Campaigns', 'actionnetwork' ),
-			'event' => __( 'Events', 'actionnetwork' ),
-			'ticketed_event' => __( 'Ticketed Events', 'actionnetwork' ),
-			'fundraising_page' => __( 'Fundraising Pages', 'actionnetwork' ),
-			'form' => __( 'Forms', 'actionnetwork' ),
-		);
-
+// TODO: have this just add the info to a batch processor
+function _actionnetwork_process_api_response($resource, $endpoint, $actionnetwork, $index, $total) {
+	
+	global $wpdb;
+	global $actionnetwork_sync_report;
+	
+	$data = array();
+	
+	// load an_id, created_date, modified_date, name, title, start_date into $data
+	$data['an_id'] = $actionnetwork->getResourceId($resource);
+	$data['created_date'] = isset($resource->created_date) ? strtotime($resource->created_date) : null;
+	$data['modified_date'] = isset($resource->modified_date) ? strtotime($resource->modified_date) : null;
+	$data['start_date'] = isset($resource->start_date) ? strtotime($resource->start_date) : null;
+	$data['browser_url'] = isset($resource->browser_url) ? $resource->browser_url : '';
+	$data['title'] = isset($resource->title) ? $resource->title : '';
+	$data['name'] = isset($resource->name) ? $resource->name : '';
+	
+	// set $data['enabled'] to 0 if:
+	// * action_network:hidden is true
+	// * status is "cancelled"
+	// * event has a start_date that is past
+	$data['enabled'] = 1;
+	if (isset($resource->{'action_network:hidden'}) && ($resource->{'action_network:hidden'} == true)) {
+		$data['enabled'] = 0;
 	}
-
-    function column_default($item, $column_name){
-        switch($column_name){
-
-			case 'type':
-                return $this->action_types[$item[$column_name]];
-			break;
-
-			case 'source':
-				return $item['an_id'] ? 'API' : __('User','actionnetwork');
-			break;
-
-            default:
-                return print_r($item,true); //Show the whole array for troubleshooting purposes
-			break;
-        }
-    }
-
-	function column_title($item) {
-		$title = $item['title'];
-		if ($item['name'] && ($item['name'] != $title)) {
-			$title .= '<span class="admin-name">('.$item['name'].')</span>';
-		}
-		return $title;
+	if (isset($resource->status) && ($resource->status == 'cancelled')) {
+		$data['enabled'] = 0;
 	}
-
-	function column_shortcode($item) {
-		$shortcode = "[actionnetwork id={$item['wp_id']}]";
-		$__copy = __( 'Copy', 'actionnetwork' );
-		return <<<EOHTML
-<div class="copy-wrapper">
-<input type="text" class="copy-text" readonly="readonly" id="shortcode-{$item['wp_id']}" value="$shortcode" /><button data-copytarget="#shortcode-{$item['wp_id']}" class="copy">$__copy</button>
-</div>
-EOHTML;
+	if ($data['start_date'] && ($data['start_date'] < time())) {
+		$data['enabled'] = 0;
 	}
+	
+	// use endpoint (minus pluralizing s) to set $data['type']
+	$data['type'] = substr($endpoint,0,strlen($endpoint) - 1);
 
-    function column_cb($item){
-		// we disable this for items which have an action network ID,
-		// because they are controlled by the Action Network backend
-		// and synced via API
-        return sprintf(
-            '<input type="checkbox" name="bulk-action[]" value="%1$s" %2$s/>',
-            $item['wp_id'],
-			$item['an_id'] ? 'disabled="disabled" title="'.__( 'Cannot perform bulk actions on actions synced via API', 'actionnetwork' ).'" ' : ''
-        );
-    }
-
-	function get_actions( $per_page = 20, $page_number = 1 ) {
-
-		global $wpdb;
-		$sql = "SELECT * FROM {$wpdb->prefix}actionnetwork";
-
-		if ( !empty( $_REQUEST['type'] ) ) {
-			$type = $_REQUEST['type'];
+	// check if action exists in database
+	$sql = "SELECT COUNT(*) FROM {$wpdb->prefix}actionnetwork WHERE an_id='{$data['an_id']}'";
+	$count = $wpdb->get_var( $sql );
+	if ($count) {
+		// if modified_date is more recent than latest api sync, get embed codes, update
+		$last_updated = get_option('actionnetwork_cache_timestamp', 0);
+		if ($last_updated < $data['modified_date']) {
+			// $embed_codes = _actionnetwork_get_embed_codes($resource, $endpoint, $actionnetwork, $data['an_id']);
+			$embed_codes = $actionnetwork->getEmbedCodes($resource, true);
+			$data = array_merge($data, _actionnetwork_clean_embed_codes($embed_codes));
+			$wpdb->update(
+				$wpdb->prefix.'actionnetwork',
+				$data,
+				array( 'an_id' => $data['an_id'] )
+			);
+			$actionnetwork_sync_report['updated']++;
 			
-			if ( array_key_exists( $type, $this->action_types ) ) {
-				$sql .= " WHERE type = '".$type."'";
-			}
+		// otherwise just reset the 'enabled' field (to prevent deletion, and hide events whose start date has passed)
+		} else {
+			$wpdb->update(
+				$wpdb->prefix.'actionnetwork',
+				array( 'enabled' => $data['enabled'] ),
+				array( 'an_id' => $data['an_id'] )
+			);
 		}
 
-		if ( !empty( $_REQUEST['source'] ) ) {
-			
-			if ( $_REQUEST['source'] == 'user' ) {
-				$sql .= " WHERE an_id = ''";
-			} elseif ( $_REQUEST['source'] == 'api' ) {
-				$sql .= " WHERE an_id != ''";
-			}
-		}
-
-		if ( !empty( $_REQUEST['orderby'] ) ) {
-			$sql .= " ORDER BY " . esc_sql( $_REQUEST['orderby'] );
-			$sql .= !empty( $_REQUEST['order'] ) ? ' ' . esc_sql( $_REQUEST['order'] ) : ' ASC';
-		}
-
-		$sql .= " LIMIT $per_page";
-		$sql .= ' OFFSET ' . ($page_number - 1) * $per_page;
-
-		$result = $wpdb->get_results( $sql, 'ARRAY_A' );
-		return $result;
-	}
-
-	function record_count() {
-		global $wpdb;
-		$sql = "SELECT COUNT(*) FROM {$wpdb->prefix}actionnetwork";
-		return $wpdb->get_var( $sql );
-	}
-
-	function delete_action( $wp_id ) {
-		global $wpdb;
-		$wpdb->delete(
-			"{$wpdb->prefix}actionnetwork",
-			array( 'wp_id' => $wp_id ),
-			array( '%d' )
+	} else {
+		// if action *doesn't* exist in the database, get embed codes, insert
+		// $embed_codes = _actionnetwork_get_embed_codes($resource, $endpoint, $actionnetwork, $data['an_id']);
+		$embed_codes = $actionnetwork->getEmbedCodes($resource, true);
+		$data = array_merge($data, _actionnetwork_clean_embed_codes($embed_codes));
+		$wpdb->insert(
+			$wpdb->prefix.'actionnetwork',
+			$data
 		);
+		$actionnetwork_sync_report['inserted']++;
 	}
-
-	function no_items() {
-		_e( 'No actions available', 'actionnetwork' );
-	}
-
-	function get_columns() {
-
-		$columns = array(
-			'cb' => '<input type="checkbox" />', //Render a checkbox instead of text
-			'title' => __( 'Title', 'actionnetwork' ),
-			'type' => __( 'Type', 'actionnetwork' ),
-			'shortcode' => __( 'Shortcode', 'actionnetwork' ),
-		);
-
-		if ( get_option( 'actionnetwork_api_key', null ) ) {
-			$columns['source'] = __( 'Source', 'actionnetwork' );;
-		}
-
-		return $columns;
-	}
-
-    function get_sortable_columns() {
-   	    $sortable_columns = array(
-   	        'title'     => array('title',false),
-   	        'type'     => array('type',false),
-		);
-        return $sortable_columns;
-    }
-
-    function get_bulk_actions() {
-        $actions = array(
-            'delete'    => __( 'Delete', 'actionnetwork' ),
-        );
-        return $actions;
-    }
-
-    function process_bulk_action() {
-        
-        //Detect when a bulk action is being triggered...
-        if( 'delete'===$this->current_action() ) {
-			$delete_wp_ids = esc_sql( $_REQUEST['bulk-action'] );
-			mail( 'uekissam@gmail.com' , 'delete_wp_ids', print_r($delete_wp_ids, 1), "From: noreply@wp-jkissam.rhcloud.com\r\n" );
-			foreach ( $delete_wp_ids as $wp_id ) {
-				self::delete_action( $wp_id );
-			}
-			$this->notices['updated'][] = __('Actions deleted', 'actionnetwork');
-        }
-        
-    }
-
-	function extra_tablenav( $which ) {
-
-		global $wpdb;
-
-		if ( $which == 'top' ) {
-
-			$type_options = '';
-			foreach ($this->action_type_plurals as $key => $plural) {
-				$sql = "SELECT COUNT(*) FROM {$wpdb->prefix}actionnetwork WHERE type='$key'";
-				$count = $wpdb->get_var( $sql );
-				$type_options .= "<option value=\"$key\"";
-				$type_options .= selected( $_REQUEST['type'], $key, false );
-				$type_options .= disabled( ($count == 0), true, false );
-				$type_options .= ">$plural</option>\n";
-			}
-
-			?>
-			<div class="alignleft actions">
-				<label for="actionnetwork-filter-by-type" class="screen-reader-text"><?php _e('Filter by type', 'actionnetwork'); ?></label>
-				<select name="type" id="actionnetwork-filter-by-type">
-					<option value=""><?php _e('All Types', 'actionnetwork'); ?></option>
-					<?php echo $type_options; ?>
-				</select>
-				<?php if ( get_option( 'actionnetwork_api_key', null ) ): ?>
-				<label for="actionnetwork-filter-by-source" class="screen-reader-text"><?php _e('Filter by source', 'actionnetwork'); ?></label>
-				<select name="source" id="actionnetwork-filter-by-source">
-					<option value=""><?php _e('All Sources', 'actionnetwork'); ?></option>
-					<option value="user"<?php selected( $_REQUEST['source'], 'user' ); ?>><?php _e('User', 'actionnetwork'); ?></option>
-					<option value="api"<?php selected( $_REQUEST['source'], 'api' ); ?>>API</option>
-				</select>
-				<?php endif; ?>
-				<input type="submit" name="filter_action" id="actionnetwork-filter-submit" class="button" value="<?php _e('Filter', 'actionnetwork'); ?>">
-			</div>
-			<?php
-
-		}
-
-	}
-
-	function prepare_items() {
-
-        $columns = $this->get_columns();
-        $hidden = array();
-        $sortable = $this->get_sortable_columns();
-        $this->_column_headers = array($columns, $hidden, $sortable);
-
-		// process bulk action
-		$this->process_bulk_action();
-
-		$per_page = $this->get_items_per_page( 'actions_per_page', 20 );
-		$current_page = $this->get_pagenum();
-		$total_items = self::record_count();
-
-		$this->set_pagination_args(array(
-			'total_items' => $total_items,
-			'per_page' => $per_page,
-		));
-
-		$this->items = self::get_actions( $per_page, $current_page );
-	}
-
 }
+
+function _actionnetwork_clean_embed_codes($embed_codes_raw) {
+	$embed_fields = array(
+		'embed_standard_layout_only_styles',
+		'embed_full_layout_only_styles',
+		'embed_standard_no_styles',
+		'embed_full_no_styles',
+		'embed_standard_default_styles',
+		'embed_full_default_styles',
+	);
+	foreach ($embed_fields as $embed_field) {
+		$embed_codes[$embed_field] = isset($embed_codes_raw[$embed_field]) ? $embed_codes_raw[$embed_field] : '';
+	}
+	return $embed_codes;
+}
+
+// shouldn't be needed
+/*
+function _actionnetwork_get_embed_codes($resource, $endpoint, $actionnetwork, $id){
+	$embed_endpoint = isset($resource->_links->{'action_network:embed'}->href) ? $resource->_links->{'action_network:embed'}->href : '';
+	if ($embed_endpoint) {
+		$embed_endpoint = str_replace('https://actionnetwork.org/api/v2/','',$embed_endpoint);
+	} else {
+		$embed_endpoint = $endpoint.'/'.$id.'/embed';
+	}
+	$embed_codes = array();
+	$embeds = $actionnetwork->call($embed_endpoint);
+	$embed_fields = array(
+		'embed_standard_layout_only_styles',
+		'embed_full_layout_only_styles',
+		'embed_standard_no_styles',
+		'embed_full_no_styles',
+		'embed_standard_default_styles',
+		'embed_full_default_styles',
+	);
+	foreach ($embed_fields as $embed_field) {
+		$embed_codes[$embed_field] = isset($embeds->$embed_field) ? $embeds->$embed_field : '';
+	}
+	return $embed_codes;
+}
+*/
+

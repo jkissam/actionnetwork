@@ -58,6 +58,16 @@ jQuery(document).ready(function($){
 	});
 
 	/**
+	 * Append clear search results link to search results subtitle
+	 */
+	$('.search-results-title').append(' (<a class="search-results-clear" href="#">'+actionnetworkText.clearResults+'</a>)');
+	$('a.search-results-clear').click(function(event){
+		event.preventDefault();
+		$('#action-search-input').val('');
+		$('#actionnetwork-actions-filter').submit();
+	});
+
+	/**
 	 * If there is an existing API Key, make sure user is sure they want to change it
 	 */
 	if ($('#actionnetwork_api_key').val().length) {
@@ -66,9 +76,56 @@ jQuery(document).ready(function($){
 		$('#actionnetwork_api_key_change').click(function(event){
 			event.preventDefault();
 			if ( confirm( actionnetworkText.confirmChangeAPIKey ) ) {
+				$('#actionnetwork_api_key_change').remove();
 				$('#actionnetwork_api_key').removeAttr('readonly').focus();
 			}
 		});
+	}
+	
+	/**
+	 * If there is a "sync-started" notice, update it via ajax
+	 */
+	if ($('#actionnetwork-update-notice-sync-started').length) {
+		$('#actionnetwork-update-notice-sync-started p').append('<img src="images/loading.gif" class="loading" />');
+		$('#actionnetwork-actions-filter').hide();
+		updateSyncStatus = setInterval(
+			function(){
+				data = {
+					action : 'actionnetwork_get_queue_status',
+					actionnetwork_ajax_nonce : $('#actionnetwork_ajax_nonce').val()
+				}
+				jQuery.get(ajaxurl,data,function(response){
+					$('#actionnetwork-update-notice-sync-started p').text(response.text);
+					$('#actionnetwork-error-notice-sync-started p').append('<img src="images/loading.gif" class="loading" />');
+					if (response.status == 'complete') {
+/*
+						lastSynced = actionnetworkText.lastSynced;
+						lastSyncedDate = new Date();
+						lastSyncedDateString = lastSyncedDate.getMonth() + 1;
+						lastSyncedDateString += '/' + lastSyncedDate.getDate();
+						lastSyncedDateString += '/' + lastSyncedDate.getFullYear();
+						lastSyncedMeridian = 'am';
+						lastSyncedHours = lastSyncedDate.getHours();
+						if (lastSyncedHours > 11) { lastSyncedMeridian = 'pm'; }
+						if (lastSyncedHours > 12) { lastSyncedHours -= 12; }
+						if (lastSyncedHours == 0) { lastSyncedHours = 12; }
+						lastSyncedDateString += ' '+lastSyncedHours;
+						lastSyncedMinutes = lastSyncedDate.getMinutes().toString();
+						if (lastSyncedMinutes.length == 1) { lastSyncedMinutes = '0' + lastSyncedMinutes; }
+						lastSyncedDateString += ':'+lastSyncedMinutes;
+						lastSyncedDateString += lastSyncedMeridian;
+						lastSynced = lastSynced.replace('%s', lastSyncedDateString);
+						$('#actionnetwork-update-sync .last-sync').text(lastSynced);
+						$('#actionnetwork-update-sync-submit').removeAttr('disabled');
+*/
+						clearInterval( updateSyncStatus );
+						$('#actionnetwork-actions-filter').submit();
+					} /* else {
+						$('#actionnetwork-error-notice-sync-started p').append('<img src="images/loading.gif" class="loading" />');
+					} */
+				})
+			}, 3000
+		);
 	}
 
 });
