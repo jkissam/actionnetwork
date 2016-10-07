@@ -29,20 +29,18 @@ class Actionnetwork_Action_List extends WP_List_Table {
 
 		$this->action_types = array(
 			'petition' => __( 'Petition', 'actionnetwork' ),
-			'advocacy_campaign' => __( 'Advocacy Campaign', 'actionnetwork' ),
-			// 'letter' => __( 'Letter Campaign', 'actionnetwork' ),
+			'advocacy_campaign' => __( 'Letter', 'actionnetwork' ),
 			'event' => __( 'Event', 'actionnetwork' ),
 			'ticketed_event' => __( 'Ticketed Event', 'actionnetwork' ),
-			'fundraising_page' => __( 'Fundraising Page', 'actionnetwork' ),
+			'fundraising_page' => __( 'Fundraiser', 'actionnetwork' ),
 			'form' => __( 'Form', 'actionnetwork' ),
 		);
 		$this->action_type_plurals = array(
 			'petition' => __( 'Petitions', 'actionnetwork' ),
-			'advocacy_campaign' => __( 'Advocacy Campaigns', 'actionnetwork' ),
-			// 'letter' => __( 'Letter Campaigns', 'actionnetwork' ),
+			'advocacy_campaign' => __( 'Letters', 'actionnetwork' ),
 			'event' => __( 'Events', 'actionnetwork' ),
 			'ticketed_event' => __( 'Ticketed Events', 'actionnetwork' ),
-			'fundraising_page' => __( 'Fundraising Pages', 'actionnetwork' ),
+			'fundraising_page' => __( 'Fundraisers', 'actionnetwork' ),
 			'form' => __( 'Forms', 'actionnetwork' ),
 		);
 
@@ -123,11 +121,16 @@ class Actionnetwork_Action_List extends WP_List_Table {
 	function column_shortcode($item) {
 		$shortcode = "[actionnetwork id={$item['wp_id']}]";
 		$__copy = __( 'Copy', 'actionnetwork' );
-		return <<<EOHTML
+		$__options = __( 'Options', 'actionnetwork' );
+		$shortcode_html = <<<EOHTML
 <div class="copy-wrapper">
 <input type="text" class="copy-text" readonly="readonly" id="shortcode-{$item['wp_id']}" value="$shortcode" /><button data-copytarget="#shortcode-{$item['wp_id']}" class="copy">$__copy</button>
 </div>
 EOHTML;
+		if ($item['an_id']) {
+			$shortcode_html .= '<div class="shortcode-options-link"><a href="#shortcode-options">' . $__options . '</a></div>';
+		}
+		return $shortcode_html;
 	}
 
 	function column_meta($item) {

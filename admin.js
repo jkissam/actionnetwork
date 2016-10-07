@@ -68,6 +68,16 @@ jQuery(document).ready(function($){
 	});
 
 	/**
+	 * javascript alert for shortcode options
+	 */
+	var shortCodeOptionsText = $('#shortcode-options').text();
+	$('#shortcode-options').hide();
+	$('.shortcode-options-link a').click(function(event){
+		event.preventDefault();
+		alert(shortCodeOptionsText);
+	});
+
+	/**
 	 * If there is an existing API Key, make sure user is sure they want to change it
 	 */
 	if ($('#actionnetwork_api_key').val().length) {

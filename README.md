@@ -11,6 +11,14 @@ Find this plugin useful? Please consider supporting further development by [hiri
 
 ## Updates
 
+_10/6/2016: version 1.0-beta2_
+
+Includes a few minor improvements to the beta version:
+* terminology updated to reflect Action Network's terms rather than OSDI's (i.e., "Letters" rather than "Advocacy Campaigns"
+* sync process streamlined somewhat
+
+Also, added inline documentation for shortcode options, and drop-down help pages.
+
 _10/3/2016: version 1.0-beta_
 
 __The Action Network Plugin is ready for beta testing!__

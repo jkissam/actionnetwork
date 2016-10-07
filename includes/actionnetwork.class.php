@@ -2,7 +2,7 @@
 
 /**
  * simple php SDK for Action Network API v2
- * verson 1.0 - December 2015
+ * verson 1.2 - October 2016
  * author: Jonathan Kissam, jonathankissam.com
  * API documentation: https://actionnetwork.org/docs
  */
@@ -62,6 +62,15 @@ class ActionNetwork {
 	public function getResourceTitle($resource) {
 		if (isset($resource->title)) { return $resource->title; }
 		if (isset($resource->name)) { return $resource->name; }
+		if (isset($resource->email_addresses) && is_array($resource->email_addresses) && count ($resource->email_addresses)) {
+			if (isset($resource->email_addresses[0]->address)) {
+				return $resource->email_addresses[0]->address;
+			}
+		}
+	}
+	
+	public function getNextPage($response) {
+		return isset($response->_links) && isset($response->_links->next) && isset($response->_links->next->href) ? $response->_links->next->href : false;
 	}
 	
 	// get embed codes
@@ -101,15 +110,26 @@ class ActionNetwork {
 
 	public function getFullSimpleCollection($endpoint) {
 		$response = $this->getCollection($endpoint);
-		if ($response->total_pages > 1) {
+		if (isset($response->total_pages)) {
+			if ($response->total_pages > 1) {
+				$full_simple_collection = $this->simplifyCollection($response, $endpoint);
+				for ($page=2;$page<=$response->total_pages;$page++) {
+					$response = $this->getCollection($endpoint, $page);
+					$full_simple_collection = array_merge($full_simple_collection, $this->simplifyCollection($response, $endpoint));
+				}
+				return $full_simple_collection;
+			} else {
+				return $this->simplifyCollection($response, $endpoint);
+			}
+		} else {
 			$full_simple_collection = $this->simplifyCollection($response, $endpoint);
-			for ($page=2;$page<=$response->total_pages;$page++) {
-				$response = $this->getCollection($endpoint, $page);
+			$next_page = $this->getNextPage($response);
+			while ($next_page) {
+				$response = $this->getCollection($next_page);
 				$full_simple_collection = array_merge($full_simple_collection, $this->simplifyCollection($response, $endpoint));
+				$next_page = $this->getNextPage($response);
 			}
 			return $full_simple_collection;
-		} else {
-			return $this->simplifyCollection($response, $endpoint);
 		}
 	}
 
@@ -136,11 +156,19 @@ class ActionNetwork {
 	public function traverseFullCollection($endpoint, $callback) {
 		$response = $this->getCollection($endpoint);
 		$this->traverseCollectionPage($endpoint, $response, $callback);
-		if ($response->total_pages > 1) {
+		if ( isset($response->total_pages) && ($response->total_pages > 1) ) {
 			for ($page=2;$page<=$response->total_pages;$page++) {
 				$response = $this->getCollection($endpoint, $page);
 				$this->traverseCollectionPage($endpoint, $response, $callback);
 			}
+		} else {
+			$next_page = $this->getNextPage($response);
+			while ($next_page) {
+				$response = $this->getCollection($next_page);
+				$this->traverseCollectionPage($endpoint, $response, $callback);
+				$next_page = $this->getNextPage($response);
+			}
+			return $full_simple_collection;
 		}
 	}
 

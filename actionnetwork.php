@@ -1,14 +1,14 @@
 <?php
 /*
  * @package ActionNetwork
- * @version 1.0-beta
+ * @version 1.0-beta2
  *
  * Plugin Name: Action Network
  * Description: Integrates with Action Network (actionnetwork.org)'s API to provide action embed codes as shortcodes
  * Author: Jonathan Kissam
  * Text Domain: actionnetwork
  * Domain Path: /languages
- * Version: 1.0-beta
+ * Version: 1.0-beta2
  * Author URI: http://jonathankissam.com
  */
 
@@ -34,7 +34,7 @@ add_option( 'actionnetwork_api_key', null );
  * Installation, database setup
  */
 global $actionnetwork_version;
-$actionnetwork_version = '1.0-beta';
+$actionnetwork_version = '1.0-beta2';
 global $actionnetwork_db_version;
 $actionnetwork_db_version = '1.0.4';
 
@@ -53,13 +53,13 @@ function actionnetwork_install() {
 		// test for particular updates here
 
 		// on first installation
-		if (!$installed_version) {
-			$install_notice = jk_branding( 'Action Network', 'https://github.com/jkissam/actionnetwork' , true, false);
-			// jk_branding will not return the notice if plugin was deleted and then re-installed
-			if ($install_notice) {
-				$notices[] = $install_notice;
-			}
-		}
+		// if (!$installed_version) {
+			$notices[] = sprintf(
+				/* translators: %s is link to text "settings page" */
+				__('Thank for you installing the Action Network plugin. If you are an Action Network partner and have an API key, please visit the plugin %s and enter your API key.', 'actionnetwork'),
+				'<a href="admin.php?page=actionnetwork&actionnetwork_tab=settings">' . __('settings page','actionnetwork') . '</a>'
+			);
+		// }
 
 		update_option( 'actionnetwork_version', $actionnetwork_version );
 	}
@@ -190,7 +190,7 @@ function actionnetwork_shortcode( $atts ) {
 
 	$id = isset($atts['id']) ? (int) $atts['id'] : null;
 	$size = isset($atts['size']) ? $atts['size'] : 'standard';
-	$style = isset($atts['style']) ? $atts['style'] : 'default';
+	$style = isset($atts['style']) ? $atts['style'] : 'layout_only';
 
 	if (!$id) { return; }
 
@@ -229,7 +229,7 @@ add_shortcode( 'actionnetwork', 'actionnetwork_shortcode' );
  */
 function actionnetwork_admin_menu() {
 	$actionnetwork_admin_menu_hook = add_menu_page( __('Administer Action Network', 'actionnetwork'), 'Action Network', 'manage_options', 'actionnetwork', 'actionnetwork_admin_page', plugins_url('icon-action-network.png', __FILE__), 21);
-	// add_action( 'load-' . $actionnetwork_admin_menu_hook, 'actionnetwork_admin_add_help' );
+	add_action( 'load-' . $actionnetwork_admin_menu_hook, 'actionnetwork_admin_add_help' );
 	/*
 	// customize the first sub-menu link
 	$actionnetwork_admin_menu_hook = add_submenu_page( __('Administer Action Network'), __('Administer'), 'manage_options', 'actionnetwork-menu', 'actionnetwork_admin_page');
@@ -638,6 +638,11 @@ function actionnetwork_admin_page() {
 					</p>
 					<?php $action_list->display(); ?>
 				</form>
+				<div id="shortcode-options">
+					<p><?php _e('Actionnetwork shortcodes for actions synced via the API can take two additional attributes besides the required <strong>id</strong> attribute:', 'actionnetwork'); ?></p>
+					<ul><li><?php _e('The <strong>size</strong> attribute can be set to <strong>full</strong> or <strong>standard</strong> (standard is the default)', 'actionnetwork'); ?></li>
+					<li><?php _e('The <strong>style</strong> attribute can be set to <strong>default</strong>, <strong>layout_only</strong>, or <strong>no</strong> (layout_only is the default)', 'actionnetwork'); ?></li></ul>
+				</div>
 			</div>
 		
 			<?php /* add action from embed code */ ?>
@@ -717,174 +722,25 @@ function actionnetwork_admin_add_help() {
 		'id'       => 'actionnetwork-help-overview',
 		'title'    => __( 'Overview', 'actionnetwork' ),
 		'content'  => __('
-<p>Placeholder for documentation</p>
+<ul>
+<li>Create a Wordpress shortcode from any Action Network embed code by using the "Add New Action" tab.</li>
+<li>Manage your saved embed codes using the Wordpress backend. Supports sorting by title, type and last modified date, and provides a search function.</li>
+<li>If you are an <a href="https://actionnetwork.org/partnerships">Action Network Partner</a>, use your API key to sync all of your actions from Action Network to Wordpress by entering it in the "Settings" tab.</li>
+</ul>
 		', 'actionnetwork'),
 	));
-}
-
-/**
- * Sync actions from API - should be able to remove everything below here if the Actionnetwork_Sync class works
- */
-global $actionnetwork_sync_report;
-$actionnetwork_sync_report = array(
-	'updated' => 0,
-	'inserted' => 0,
-	'deleted' => 0,
-);
-function _actionnetwork_sync_actions(){
-
-	global $wpdb;
-	global $actionnetwork_sync_report;
-
-	if ($actionnetwork_api_key = get_option('actionnetwork_api_key')) {
-
-		$actionnetwork_sync_report = array(
-			'updated' => 0,
-			'inserted' => 0,
-			'deleted' => 0,
-		);
-
-		// load all the content into simple id => title arrays
-		$actionnetwork = new ActionNetwork($actionnetwork_api_key);
-
-		// mark all existing API-synced actions for deletion (any that are still synced will be un-marked)
-		$wpdb->query("UPDATE {$wpdb->prefix}actionnetwork SET enabled=-1 WHERE an_id != ''");
-
-		$endpoints = array( 'petitions', 'events', 'fundraising_pages', 'advocacy_campaigns', 'forms' );
-		foreach ($endpoints as $endpoint) {
-			$actionnetwork->traverseFullCollection( $endpoint, '_actionnetwork_process_api_response' );
-		}
-		// TODO: initiate batch processor here...
-
-		// now remove all API-synced action that are still marked for deletion
-		$actionnetwork_sync_report['deleted'] = $wpdb->query("DELETE FROM {$wpdb->prefix}actionnetwork WHERE an_id != '' AND enabled=-1");
-
-		// update synced timestamp
-		update_option('actionnetwork_cache_timestamp', time());
-
-		// return a notice that sync has been completed, report number of updated/inserted/deleted actions
-		return sprintf(
-			/* translators: 1: Number of updated actions, 2: Number of inserted actions, 3: Number of deleted actions */
-			__('API sync has been completed. Updated: %1$d. Inserted: %2$d. Deleted: %3$d.', 'actionnetwork'),
-			$actionnetwork_sync_report['updated'],
-			$actionnetwork_sync_report['inserted'],
-			$actionnetwork_sync_report['deleted']
-		);
-	}
-}
-
-// TODO: have this just add the info to a batch processor
-function _actionnetwork_process_api_response($resource, $endpoint, $actionnetwork, $index, $total) {
 	
-	global $wpdb;
-	global $actionnetwork_sync_report;
+	$screen->add_help_tab( array(
+		'id'       => 'actionnetwork-help-shortcodes',
+		'title'    => __( 'Shortcode options', 'actionnetwork' ),
+		'content'  => '<p>'.__('Actionnetwork shortcodes for actions synced via the API can take two additional attributes besides the required <strong>id</strong> attribute:', 'actionnetwork') . '</p><ul><li>' . __('The <strong>size</strong> attribute can be set to <strong>full</strong> or <strong>standard</strong> (standard is the default)', 'actionnetwork') . '</li><li>' . __('The <strong>style</strong> attribute can be set to <strong>default</strong>, <strong>layout_only</strong>, or <strong>no</strong> (layout_only is the default)', 'actionnetwork') . '</li></ul>',
+	));
 	
-	$data = array();
+	$screen->add_help_tab( array(
+		'id'       => 'actionnetwork-help-ticketed-events',
+		'title'    => __( 'Ticketed Events', 'actionnetwork' ),
+		'content'  => '<p>' . __('Ticketed events are not currently supported by Action Network\'s API, and so this plugin will not sync them. If you want to use a ticketed event, you will need to add the embed code yourself using the "Add New Action" tab.', 'actionnetwork') . '</p>',
+	));
 	
-	// load an_id, created_date, modified_date, name, title, start_date into $data
-	$data['an_id'] = $actionnetwork->getResourceId($resource);
-	$data['created_date'] = isset($resource->created_date) ? strtotime($resource->created_date) : null;
-	$data['modified_date'] = isset($resource->modified_date) ? strtotime($resource->modified_date) : null;
-	$data['start_date'] = isset($resource->start_date) ? strtotime($resource->start_date) : null;
-	$data['browser_url'] = isset($resource->browser_url) ? $resource->browser_url : '';
-	$data['title'] = isset($resource->title) ? $resource->title : '';
-	$data['name'] = isset($resource->name) ? $resource->name : '';
-	
-	// set $data['enabled'] to 0 if:
-	// * action_network:hidden is true
-	// * status is "cancelled"
-	// * event has a start_date that is past
-	$data['enabled'] = 1;
-	if (isset($resource->{'action_network:hidden'}) && ($resource->{'action_network:hidden'} == true)) {
-		$data['enabled'] = 0;
-	}
-	if (isset($resource->status) && ($resource->status == 'cancelled')) {
-		$data['enabled'] = 0;
-	}
-	if ($data['start_date'] && ($data['start_date'] < time())) {
-		$data['enabled'] = 0;
-	}
-	
-	// use endpoint (minus pluralizing s) to set $data['type']
-	$data['type'] = substr($endpoint,0,strlen($endpoint) - 1);
-
-	// check if action exists in database
-	$sql = "SELECT COUNT(*) FROM {$wpdb->prefix}actionnetwork WHERE an_id='{$data['an_id']}'";
-	$count = $wpdb->get_var( $sql );
-	if ($count) {
-		// if modified_date is more recent than latest api sync, get embed codes, update
-		$last_updated = get_option('actionnetwork_cache_timestamp', 0);
-		if ($last_updated < $data['modified_date']) {
-			// $embed_codes = _actionnetwork_get_embed_codes($resource, $endpoint, $actionnetwork, $data['an_id']);
-			$embed_codes = $actionnetwork->getEmbedCodes($resource, true);
-			$data = array_merge($data, _actionnetwork_clean_embed_codes($embed_codes));
-			$wpdb->update(
-				$wpdb->prefix.'actionnetwork',
-				$data,
-				array( 'an_id' => $data['an_id'] )
-			);
-			$actionnetwork_sync_report['updated']++;
-			
-		// otherwise just reset the 'enabled' field (to prevent deletion, and hide events whose start date has passed)
-		} else {
-			$wpdb->update(
-				$wpdb->prefix.'actionnetwork',
-				array( 'enabled' => $data['enabled'] ),
-				array( 'an_id' => $data['an_id'] )
-			);
-		}
-
-	} else {
-		// if action *doesn't* exist in the database, get embed codes, insert
-		// $embed_codes = _actionnetwork_get_embed_codes($resource, $endpoint, $actionnetwork, $data['an_id']);
-		$embed_codes = $actionnetwork->getEmbedCodes($resource, true);
-		$data = array_merge($data, _actionnetwork_clean_embed_codes($embed_codes));
-		$wpdb->insert(
-			$wpdb->prefix.'actionnetwork',
-			$data
-		);
-		$actionnetwork_sync_report['inserted']++;
-	}
 }
-
-function _actionnetwork_clean_embed_codes($embed_codes_raw) {
-	$embed_fields = array(
-		'embed_standard_layout_only_styles',
-		'embed_full_layout_only_styles',
-		'embed_standard_no_styles',
-		'embed_full_no_styles',
-		'embed_standard_default_styles',
-		'embed_full_default_styles',
-	);
-	foreach ($embed_fields as $embed_field) {
-		$embed_codes[$embed_field] = isset($embed_codes_raw[$embed_field]) ? $embed_codes_raw[$embed_field] : '';
-	}
-	return $embed_codes;
-}
-
-// shouldn't be needed
-/*
-function _actionnetwork_get_embed_codes($resource, $endpoint, $actionnetwork, $id){
-	$embed_endpoint = isset($resource->_links->{'action_network:embed'}->href) ? $resource->_links->{'action_network:embed'}->href : '';
-	if ($embed_endpoint) {
-		$embed_endpoint = str_replace('https://actionnetwork.org/api/v2/','',$embed_endpoint);
-	} else {
-		$embed_endpoint = $endpoint.'/'.$id.'/embed';
-	}
-	$embed_codes = array();
-	$embeds = $actionnetwork->call($embed_endpoint);
-	$embed_fields = array(
-		'embed_standard_layout_only_styles',
-		'embed_full_layout_only_styles',
-		'embed_standard_no_styles',
-		'embed_full_no_styles',
-		'embed_standard_default_styles',
-		'embed_full_default_styles',
-	);
-	foreach ($embed_fields as $embed_field) {
-		$embed_codes[$embed_field] = isset($embeds->$embed_field) ? $embeds->$embed_field : '';
-	}
-	return $embed_codes;
-}
-*/
 
