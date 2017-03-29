@@ -52,7 +52,7 @@ class Actionnetwork_Action_List extends WP_List_Table {
 			'cb' => '<input type="checkbox" />', //Render a checkbox instead of text
 			'title' => __( 'Title', 'actionnetwork' ),
 			'type' => __( 'Type', 'actionnetwork' ),
-			'modified_date' => __( 'Last Modified', 'actionnetwork' ),
+			'modified_date' => __( 'Modified', 'actionnetwork' ),
 			'shortcode' => __( 'Shortcode', 'actionnetwork' ),
 		);
 
@@ -73,7 +73,8 @@ class Actionnetwork_Action_List extends WP_List_Table {
     }
 
 	function single_row($item) {
-		echo '<tr class="actionnetwork-action-' . ($item['enabled'] ? 'enabled' : 'hidden') . '">';
+		$show = $item['enabled'] && !$item['hidden'];
+		echo '<tr class="actionnetwork-action-' . ($show ? 'enabled' : 'hidden') . '">';
 		$this->single_row_columns( $item );
 		echo '</tr>';
 	}
@@ -102,7 +103,7 @@ class Actionnetwork_Action_List extends WP_List_Table {
         return sprintf(
             '<input type="checkbox" name="bulk-action[]" value="%1$s" %2$s/>',
             $item['wp_id'],
-			$item['an_id'] ? 'disabled="disabled" title="'.__( 'Cannot perform bulk actions on actions synced via API', 'actionnetwork' ).'" ' : ''
+			$item['an_id'] ? 'class="actionnetwork-synced" title="'.__( 'Cannot bulk delete actions synced via API', 'actionnetwork' ).'" ' : ''
         );
     }
 
@@ -112,7 +113,8 @@ class Actionnetwork_Action_List extends WP_List_Table {
 		} else {
 			$title = $item['title'];
 		}
-		if (!$item['enabled']) {
+		$show = $item['enabled'] && !$item['hidden'];
+		if (!$show) {
 			$title = '<span class="dashicons dashicons-hidden" title="'.__('This action is hidden', 'actionnetwork').'"></span> '.$title;
 		}
 		return $title;
@@ -135,16 +137,25 @@ EOHTML;
 
 	function column_meta($item) {
 		$info = '';
+		if ($item['start_date']) {
+			$info .= '<div><span class="dashicons dashicons-calendar"></span> '.date('n/j/Y g:ia', $item['start_date']).'</div>';
+		}
 		if ($item['browser_url']) {
 			$info .= '<div><a href="' . $item['browser_url'] . '" target="_blank"><span class="dashicons dashicons-external"></span> ' . __( 'View action', 'actionnetwork' ) . '</a></div>';
 			$info .= '<div><a href="' . $item['browser_url'] . '/manage" target="_blank"><span class="dashicons dashicons-admin-tools"></span> ' . __( 'Manage action', 'actionnetwork' ) . '</a></div>';
 		}
-		if ($item['start_date']) {
-			$info .= '<div><span class="dashicons dashicons-calendar"></span> '.date('n/j/Y g:ia', $item['start_date']).'</div>';
-		}
 		$source = $item['an_id'] ? 'API' : __( 'User', 'actionnetwork' );
 		$source_icon = $item['an_id'] ? '<img class="icon" src="'.plugins_url('../icon-action-network.png', __FILE__).'" /> ' : '<span class="dashicons dashicons-admin-users"></span> ';
 		$info .= '<div>' . $source_icon . __('Source', 'actionnetwork') . ': '. $source . '</div>';
+		if ($source != 'API' && (($item['type'] == 'event') || ($item['type'] == 'ticketed_event'))) {
+			$info .= '<div><a href="';
+			$info .= wp_nonce_url(
+				admin_url('admin.php?page=actionnetwork&actionnetwork_admin_action=edit_event&actionnetwork_event_wp_id='.$item['wp_id']),
+				'actionnetwork_edit_event',
+				'actionnetwork_nonce_field'
+			);
+			$info .='"><span class="dashicons dashicons-edit"></span> '.__('Edit event','actionnetwork').'</a></div>';
+		}
 /*
 		if ($item['created_date']) {
 			$info .= '<div>'.__('Created','actionnetwork').': '.date('n/j/Y', $item['created_date']).'</div>';
@@ -181,6 +192,7 @@ EOHTML;
 
 		if ( empty( $_REQUEST['show_hidden']) ) {
 			$filter_conditions[] = "enabled = 1";
+			$filter_conditions[] = "hidden = 0";
 		}
 
 		$filter = '';
@@ -232,7 +244,7 @@ EOHTML;
 		global $wpdb;
 		$wpdb->update(
 			"{$wpdb->prefix}actionnetwork",
-			array( 'enabled' => 0 ),
+			array( 'hidden' => 1 ),
 			array( 'wp_id' => $wp_id ),
 			array( '%d' ),
 			array( '%d' )
@@ -243,7 +255,7 @@ EOHTML;
 		global $wpdb;
 		$wpdb->update(
 			"{$wpdb->prefix}actionnetwork",
-			array( 'enabled' => 1 ),
+			array( 'hidden' => 0 ),
 			array( 'wp_id' => $wp_id ),
 			array( '%d' ),
 			array( '%d' )
@@ -264,13 +276,32 @@ EOHTML;
     }
 
     function process_bulk_action() {
+	    global $wpdb;
         
         if( 'delete'===$this->current_action() ) {
 			$delete_wp_ids = esc_sql( $_REQUEST['bulk-action'] );
+			$deleted_actions = 0;
+			$cannot_delete_synced_actions = 0;
 			foreach ( $delete_wp_ids as $wp_id ) {
-				self::delete_action( $wp_id );
+				if ($wpdb->get_var("SELECT COUNT(*) FROM `{$wpdb->prefix}actionnetwork` WHERE an_id='' AND wp_id=$wp_id")) {
+					self::delete_action( $wp_id );
+					$deleted_actions++;
+				} else {
+					$cannot_delete_synced_actions++;
+				}
 			}
-			$this->notices['updated'][] = __('Actions deleted', 'actionnetwork');
+			if ($cannot_delete_synced_actions) {
+				$this->notices['error'][] = sprintf(
+					/* translators: %d is number of actions that could not be deleted because they were synced from API */
+					__('%d actions could not be deleted because they were synced via API', 'actionnetwork'),
+					$cannot_delete_synced_actions);
+			}
+			if ($deleted_actions) {
+				$this->notices['updated'][] = sprintf(
+					/* translators: %d is number of actions successfully deleted */
+					__('%d actions deleted', 'actionnetwork'),
+					$deleted_actions);
+			}
         }
         
         if( 'hide'===$this->current_action() ) {
@@ -283,10 +314,26 @@ EOHTML;
         
         if( 'unhide'===$this->current_action() ) {
 			$unhide_wp_ids = esc_sql( $_REQUEST['bulk-action'] );
+			$cannot_unhide_synced_disabled_actions = 0;
+			$unhidden_actions = 0;
 			foreach ( $unhide_wp_ids as $wp_id ) {
-				self::unhide_action( $wp_id );
+				if ($wpdb->get_var("SELECT COUNT(*) FROM `{$wpdb->prefix}actionnetwork` WHERE an_id != '' AND enabled=0 AND wp_id=$wp_id")) {
+					$cannot_unhide_synced_disabled_actions++;
+				} else {
+					self::unhide_action( $wp_id );
+					$unhidden_actions++;
+				}
 			}
-			$this->notices['updated'][] = __('Actions unhidden', 'actionnetwork');
+			if ($cannot_unhide_synced_disabled_actions) {
+				$this->notices['updated'][] = sprintf(
+					/* translators: %d is the number of actions which could not be unhidden */
+					__('%d actions could not be unhidden because they are synced via API and have passed or are disabled in Action Network', 'actionnetwork'), $cannot_unhide_synced_disabled_actions);
+			}
+			if ($unhidden_actions) {
+				$this->notices['updated'][] = sprintf(
+					/* translators: %d is the number of actions unhidden */
+					__('%d actions unhidden', 'actionnetwork'), $unhidden_actions);
+			}
         }
         
     }

@@ -18,8 +18,9 @@ class Actionnetwork_Sync extends ActionNetwork {
 		global $wpdb;
 
 		// error_log( "Actionnetwork_Sync::init called", 0 );
-		
-		// mark all existing API-synced actions for deletion (any that are still synced will be un-marked)
+
+		// mark all existing API-synced actions for deletion
+		// (any that are still synced will be un-marked)
 		$wpdb->query("UPDATE {$wpdb->prefix}actionnetwork SET enabled=-1 WHERE an_id != ''");
 		
 		// load actions from Action Network into the queue
@@ -154,6 +155,8 @@ class Actionnetwork_Sync extends ActionNetwork {
 		$data['browser_url'] = isset($resource->browser_url) ? $resource->browser_url : '';
 		$data['title'] = isset($resource->title) ? $resource->title : '';
 		$data['name'] = isset($resource->name) ? $resource->name : '';
+		$data['description'] = isset($resource->description) ? $resource->description : '';
+		$data['location'] = isset($resource->location) ? serialize($resource->location) : '';
 	
 		// set $data['enabled'] to 0 if:
 		// * action_network:hidden is true
@@ -174,11 +177,11 @@ class Actionnetwork_Sync extends ActionNetwork {
 		$data['type'] = substr($endpoint,0,strlen($endpoint) - 1);
 
 		// check if action exists in database
+		// if it does, we don't need to get embed codes, because those never change
 		$sql = "SELECT COUNT(*) FROM {$wpdb->prefix}actionnetwork WHERE an_id='{$data['an_id']}'";
 		$count = $wpdb->get_var( $sql );
 		if ($count) {
 			// if modified_date is more recent than latest api sync, update
-			// we don't need to get embed codes, because those never change
 			$last_updated = get_option('actionnetwork_cache_timestamp', 0);
 			if ($last_updated < $data['modified_date']) {
 				$wpdb->update(

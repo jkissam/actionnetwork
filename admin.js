@@ -3,12 +3,18 @@ jQuery(document).ready(function($){
 	/**
 	 * Admin tabs
 	 */
+	 
+	 if (jQuery(window.location.hash).hasClass('actionnetwork-admin-tab')) {
+		$('.wrap .nav-tab-wrapper .nav-tab-active').removeClass('nav-tab-active');
+		$('.wrap .nav-tab-wrapper .nav-tab[href="'+window.location.hash+'"]').addClass('nav-tab-active');
+	}
 	
 	if (!$('.wrap .nav-tab-wrapper .nav-tab-active').length) {
 		$('.wrap .nav-tab-wrapper .nav-tab:eq(0)').addClass('nav-tab-active');
 	}
 
 	var currentTab = $('.wrap .nav-tab-wrapper .nav-tab-active').attr('href');
+	$('.actionnetwork-admin-tab').hide();
 	$(currentTab).show();
 
 	$('.wrap .nav-tab-wrapper .nav-tab, .wrap h1 .page-title-action').click(function(event){
@@ -23,6 +29,7 @@ jQuery(document).ready(function($){
 			event.preventDefault();
 			$('.actionnetwork-admin-tab').hide();
 			$(showTab).show();
+			window.location.hash = '';
 		}
 	});
 	
@@ -80,7 +87,7 @@ jQuery(document).ready(function($){
 	/**
 	 * If there is an existing API Key, make sure user is sure they want to change it
 	 */
-	if ($('#actionnetwork_api_key').val().length) {
+	if ($('#actionnetwork_api_key').length && $('#actionnetwork_api_key').val().length) {
 		$('#actionnetwork_api_key').attr('readonly','readonly');
 		$('#actionnetwork_api_key').after('<button id="actionnetwork_api_key_change">'+actionnetworkText.changeAPIKey+'</button>');
 		$('#actionnetwork_api_key_change').click(function(event){
@@ -108,31 +115,9 @@ jQuery(document).ready(function($){
 					$('#actionnetwork-update-notice-sync-started p').text(response.text);
 					$('#actionnetwork-error-notice-sync-started p').append('<img src="images/loading.gif" class="loading" />');
 					if (response.status == 'complete') {
-/*
-						lastSynced = actionnetworkText.lastSynced;
-						lastSyncedDate = new Date();
-						lastSyncedDateString = lastSyncedDate.getMonth() + 1;
-						lastSyncedDateString += '/' + lastSyncedDate.getDate();
-						lastSyncedDateString += '/' + lastSyncedDate.getFullYear();
-						lastSyncedMeridian = 'am';
-						lastSyncedHours = lastSyncedDate.getHours();
-						if (lastSyncedHours > 11) { lastSyncedMeridian = 'pm'; }
-						if (lastSyncedHours > 12) { lastSyncedHours -= 12; }
-						if (lastSyncedHours == 0) { lastSyncedHours = 12; }
-						lastSyncedDateString += ' '+lastSyncedHours;
-						lastSyncedMinutes = lastSyncedDate.getMinutes().toString();
-						if (lastSyncedMinutes.length == 1) { lastSyncedMinutes = '0' + lastSyncedMinutes; }
-						lastSyncedDateString += ':'+lastSyncedMinutes;
-						lastSyncedDateString += lastSyncedMeridian;
-						lastSynced = lastSynced.replace('%s', lastSyncedDateString);
-						$('#actionnetwork-update-sync .last-sync').text(lastSynced);
-						$('#actionnetwork-update-sync-submit').removeAttr('disabled');
-*/
 						clearInterval( updateSyncStatus );
 						$('#actionnetwork-actions-filter').submit();
-					} /* else {
-						$('#actionnetwork-error-notice-sync-started p').append('<img src="images/loading.gif" class="loading" />');
-					} */
+					}
 				})
 			}, 3000
 		);
