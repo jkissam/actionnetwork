@@ -6,6 +6,7 @@ class Actionnetwork_Sync extends ActionNetwork {
 	public $inserted = 0;
 	public $deleted = 0;
 	private $processStartTime = 0;
+	private $nestingLevel = 0;
 	private $endpoints = array( 'petitions', 'events', 'fundraising_pages', 'advocacy_campaigns', 'forms' );
 	
 	function __construct() {
@@ -87,6 +88,11 @@ class Actionnetwork_Sync extends ActionNetwork {
 		$current_memory = memory_get_usage( true );
 		if ( $current_memory >= $memory_limit ) { $start_new_process = true; }
 		
+		// check nesting level
+		if ($this->nestingLevel > 100) {
+			$start_new_process = true;
+		}
+		
 		// check process time
 		$time_elapsed = time() - $this->processStartTime;
 		if ( $time_elapsed > 20 ) { $start_new_process = true; }
@@ -94,6 +100,7 @@ class Actionnetwork_Sync extends ActionNetwork {
 		// if over 90% of memory or 20 seconds, use ajax to start a new process
 		// and pass updated and inserted variables
 		if ($start_new_process) {
+			
 			$ajax_url = admin_url( 'admin-ajax.php' );
 
 			// since we're making this call from the server, we can't use a nonce
@@ -110,6 +117,9 @@ class Actionnetwork_Sync extends ActionNetwork {
 				'token' => $token,
 			);
 			$args = array( 'body' => $body );
+			
+			// error_log( "Actionnetwork_Sync::processQueue trying to start new process, making ajax call to $ajax_url with following args:\n\n" . print_r( $args, 1) . "\n\nActionnetwork_Sync's current state:\n\n" . print_r( $this, 1), 0 );
+			
 			wp_remote_post( $ajax_url, $args );
 			wp_die();
 			return;
@@ -119,6 +129,7 @@ class Actionnetwork_Sync extends ActionNetwork {
 		$this->processResource();
 		
 		// call processQueue to check queue and process status before processing the next resource
+		$this->nestingLevel++;
 		$this->processQueue();
 	}
 	

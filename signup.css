@@ -1,0 +1,4 @@
+.actionnetwork-signup-form ul { list-style: none outside none; margin: 0; padding: 0; }
+.actionnetwork-signup-form ul li { margin: 0 0 1em; padding: 0; }
+.actionnetwork_signup_widget input.error { border-color: #f00; }
+.actionnetwork_signup_widget .error { color: #f00; }

@@ -1,23 +1,22 @@
 <?php
 /*
  * @package ActionNetwork
- * @version 1.0-beta5
+ * @version 1.0
  *
  * Plugin Name: Action Network
- * Description: Integrates with Action Network (actionnetwork.org)'s API to provide action embed codes as shortcodes
+ * Description: Provides Action Network (actionnetwork.org) action embed codes as shortcodes and a calendar and signup widget
  * Author: Jonathan Kissam
  * Text Domain: actionnetwork
  * Domain Path: /languages
- * Version: 1.0-beta5
+ * Version: 1.0
+ * License: GPLv3
  * Author URI: http://jonathankissam.com
  */
 
 /**
  * Includes
  */
-if (!defined('JONATHANKISSAM_BRANDING_VERSION')) {
-	require_once( plugin_dir_path( __FILE__ ) . 'jk_wp_branding/jk_branding.inc.php' );
-}
+
 if (!class_exists('ActionNetwork')) {
 	require_once( plugin_dir_path( __FILE__ ) . 'includes/actionnetwork.class.php' );
 }
@@ -34,7 +33,7 @@ add_option( 'actionnetwork_api_key', null );
  * Installation, database setup
  */
 global $actionnetwork_version;
-$actionnetwork_version = '1.0-beta5';
+$actionnetwork_version = '1.0';
 global $actionnetwork_db_version;
 $actionnetwork_db_version = '1.0.7';
 
@@ -200,11 +199,12 @@ add_action( 'admin_notices', 'actionnetwork_admin_notices' );
 /**
  * Widgets
  */
-if (!class_exists('ActionNetwork_Widgets')) {
+if (!class_exists('ActionNetwork_Calendar_Widget')) {
 	require_once( plugin_dir_path( __FILE__ ) . 'includes/actionnetwork-widgets.class.php' );
 }
 add_action( 'widgets_init', function(){
 	register_widget( 'ActionNetwork_Calendar_Widget' );
+	register_widget( 'ActionNetwork_Signup_Widget' );
 });
 
 
@@ -259,7 +259,7 @@ function actionnetwork_calendar_shortcode ( $atts, $content = null ) {
 	$n = isset($atts['n']) ? (int) $atts['n'] : 0;
 	// $page = isset($atts['page']) ? (int) $atts['page'] : 10;
 	$date_format = isset($atts['date_format']) ? sanitize_text_field($atts['date_format']) : 'F j, Y';
-	$link_format = isset($atts['link_format']) ? sanitize_text_field($atts['link_format']) : '';
+	$link_format = isset($atts['link_format']) ? sanitize_text_field($atts['link_format']) : '{{ event.link }}';
 	$link_text = isset($atts['link_text']) ? $atts['link_text'] : '{{ event.date }}: {{ event.title }}';
 	$container_element = isset($atts['container_element']) ? sanitize_key($atts['container_element']) : 'ul';
 	$container_class = isset($atts['container_class']) ? sanitize_html_class($atts['container_class']) : 'actionnetwork-calendar';
@@ -328,6 +328,27 @@ EOHTML;
 	$sql .= " ORDER BY start_date ASC";
 	if ($n) { $sql .= " LIMIT 0,$n"; }
 	$events = $wpdb->get_results( $sql, ARRAY_A );
+	
+	// if json="1" attribute is set, render as JSON object
+	if (isset($atts['json']) && $atts['json']) {
+		foreach($events as $index => $event) {
+			$event['date'] = isset($event['start_date']) ? date($date_format, $event['start_date']) : '(No Date)';
+			$event['link']= isset($event['browser_url']) ? $event['browser_url'] : site_url();
+			$event['id'] = isset($event['wp_id']) ? $event['wp_id'] : 0;
+			$location_json = isset($event['location']) ? unserialize( $event['location'] ) : new stdClass();
+			$event['location'] = isset($event['location'])? _actionnetwork_render_location( $event['location'] ) : '';
+			$event['link'] = $link_format ? _actionnetwork_calendar_render( $link_format, $event) : $event['link'];
+			$event['location_json'] = $location_json;
+			$events[$index] = $event;
+		}
+		$json = json_encode($events);
+		$output = '<script type="text/javascript">';
+		$output .= "\n";
+		$output .= 'actionNetworkEvents = '.$json;
+		$output .= ";\n";
+		$output .= '</script>';
+		return $output;
+	}
 	
 	$output = $pre;
 	if (count($events)) {
@@ -475,6 +496,8 @@ function actionnetwork_process_queue(){
 	$inserted = isset($_REQUEST['inserted']) ? $_REQUEST['inserted'] : 0;
 	$new_only = isset($_REQUEST['new_only']) ? $_REQUEST['new_only'] : 0;
 	$status = get_option( 'actionnetwork_queue_status', 'empty' );
+	
+	// error_log( "actionnetwork_process_queue called with the following _REQUEST args:\n\n" . print_r( $_REQUEST, 1) . "\n\nqueue_action: $queue_action\nstatus:$status\n\n", 0 );
 
 	// otherwise delete the ajax token
 	
@@ -491,6 +514,8 @@ function actionnetwork_process_queue(){
 		$sync->new_only = $new_only;
 		if ($queue_action == 'init') { $sync->init(); }
 		$sync->processQueue();
+		
+		// error_log("New Actionnetwork_Sync created; current state:\n\n" . print_r( $sync, 1), 0 );
 	
 	}
 	
@@ -698,6 +723,10 @@ function _actionnetwork_admin_handle_actions(){
 				
 				$embed_title = isset($_REQUEST['actionnetwork_add_embed_title']) ? stripslashes($_REQUEST['actionnetwork_add_embed_title']) : '';
 				$embed_date_string = isset($_REQUEST['actionnetwork_add_embed_date']) ? stripslashes($_REQUEST['actionnetwork_add_embed_date']) : '';
+				$embed_date_time_hour = isset($_REQUEST['actionnetwork_add_embed_date_time_hour']) ? intval($_REQUEST['actionnetwork_add_embed_date_time_hour']) : 12;
+				$embed_date_time_minutes = isset($_REQUEST['actionnetwork_add_embed_date_time_minutes']) ? intval($_REQUEST['actionnetwork_add_embed_date_time_minutes']) : 0;
+				if ($embed_date_time_minutes < 10) { $embed_date_time_minutes = '0' . $embed_date_time_minutes; }
+				$embed_date_time_ampm = isset($_REQUEST['actionnetwork_add_embed_date_time_ampm']) ? _actionnetwork_validate_ampm($_REQUEST['actionnetwork_add_embed_date_time_ampm']) : 'am';
 				$embed_code = isset($_REQUEST['actionnetwork_add_embed_code']) ? stripslashes($_REQUEST['actionnetwork_add_embed_code']) : '';
 				$location = isset($_REQUEST['actionnetwork_add_location']) ? stripslashes($_REQUEST['actionnetwork_add_location']) : '';
 				
@@ -717,6 +746,9 @@ function _actionnetwork_admin_handle_actions(){
 				
 				$embed_title = esc_attr($event['title']);
 				$embed_date_string = date('Y-m-d', $event['start_date']);
+				$embed_date_time_hour = date('h', $event['start_date']);
+				$embed_date_time_minutes = date('i', $event['start_date']);
+				$embed_date_time_ampm = date('a', $event['start_date']);
 				$embed_code = _actionnetwork_get_embed_code( $event, '', false );
 				$location_object = unserialize( $event['location'] );
 				$location = isset( $location_object->html ) ? $location_object->html : '';
@@ -726,6 +758,7 @@ function _actionnetwork_admin_handle_actions(){
 			if ($update) {	
 				
 				$event['title'] = $embed_title;
+				$embed_date_string .= ' '.$embed_date_time_hour.':'.$embed_date_time_minutes.' '.$embed_date_time_ampm;
 				$event['start_date'] = strtotime($embed_date_string);
 				$event['modified_date'] = time();
 				
@@ -755,6 +788,7 @@ function _actionnetwork_admin_handle_actions(){
 					/* translators: %s is title of event */
 					__('%s has been updated', 'actionnetwork'), $embed_title
 				);
+				// $return['notices']['error'][] = '$embed_date_string: '.$embed_date_string.'<br /><br />$_REQUEST:<br /><br /><pre>'.print_r($_REQUEST,1).'</pre>';
 				
 			// otherwise, build an edit form	
 			} else {
@@ -771,12 +805,13 @@ function _actionnetwork_admin_handle_actions(){
 				$text_required = __('This field is required', 'actionnetwork');
 				$error_title_required = isset($return['errors']['#actionnetwork_add_embed_title']) && $return['errors']['#actionnetwork_add_embed_title'] ? ' error' : '';
 				$text_date = __('Date (if event)', 'actionnetwork');
+				$input_time = _actionnetwork_build_time_input( $embed_date_time_hour, $embed_date_time_minutes, $embed_date_time_ampm );
 				
 				$text_embed_code = __('Embed Code/Event Description', 'actionnetwork');
 				$error_embed_code_required = isset($return['errors']['#actionnetwork_add_embed_code']) && $return['errors']['#actionnetwork_add_embed_code'] ? ' error' : '';
 				
 				$text_location = __('Event location', 'actionnetwork');
-				$text_location_description = __('Event location will only display on the upcoming events list; if you are entering a description above (instead of an embed code), make sure the location is included in the description as well');
+				$text_location_description = __('If you are entering a description above (instead of an embed code), make sure the title, date and location (if relevant) are included in the description as well.');
 				
 				$text_update_event = __('Update event', 'actionnetwork');
 				
@@ -813,7 +848,7 @@ function _actionnetwork_admin_handle_actions(){
 						<tr valign="top">
 							<th scope="row"><label for="actionnetwork_add_embed_date">$text_date</label></th>
 							<td>
-								<input id="actionnetwork_add_embed_date" name="actionnetwork_add_embed_date" type="date" value="$embed_date_string" />
+								<input id="actionnetwork_add_embed_date" name="actionnetwork_add_embed_date" type="date" value="$embed_date_string" /> $input_time
 							</td>
 						</tr>
 						<tr valign="top">
@@ -844,6 +879,10 @@ EOHTML;
 		case 'add_embed':
 		$embed_title = isset($_REQUEST['actionnetwork_add_embed_title']) ? stripslashes($_REQUEST['actionnetwork_add_embed_title']) : '';
 		$embed_date_string = isset($_REQUEST['actionnetwork_add_embed_date']) ? stripslashes($_REQUEST['actionnetwork_add_embed_date']) : '';
+		$embed_date_time_hour = isset($_REQUEST['actionnetwork_add_embed_date_time_hour']) ? intval($_REQUEST['actionnetwork_add_embed_date_time_hour']) : 12;
+		$embed_date_time_minutes = isset($_REQUEST['actionnetwork_add_embed_date_time_minutes']) ? intval($_REQUEST['actionnetwork_add_embed_date_time_minutes']) : 0;
+		if ($embed_date_time_minutes < 10) { $embed_date_time_minutes = '0' . $embed_date_time_minutes; }
+		$embed_date_time_ampm = isset($_REQUEST['actionnetwork_add_embed_date_time_ampm']) ? _actionnetwork_validate_ampm($_REQUEST['actionnetwork_add_embed_date_time_ampm']) : 'am';
 		$embed_code = isset($_REQUEST['actionnetwork_add_embed_code']) ? stripslashes($_REQUEST['actionnetwork_add_embed_code']) : '';
 		$location = isset($_REQUEST['actionnetwork_add_location']) ? stripslashes($_REQUEST['actionnetwork_add_location']) : '';
 		$embed_wp_id = isset($_REQUEST['actionnetwork_embed_wp_id']) ? (int) $_REQUEST['actionnetwork_embed_wp_id'] : 0;
@@ -867,6 +906,9 @@ EOHTML;
 				$return['notices']['error'][] = __('You must give your action a title', 'actionnetwork');
 				$return['errors']['#actionnetwork_add_embed_title'] = true;
 				$return['actionnetwork_add_embed_date'] = $embed_date_string;
+				$return['actionnetwork_add_embed_date_time_hour'] = $embed_date_time_hour;
+				$return['actionnetwork_add_embed_date_time_minutes'] = $embed_date_time_minutes;
+				$return['actionnetwork_add_embed_date_time_ampm'] = $embed_date_time_ampm;
 				$return['actionnetwork_add_embed_code'] = $embed_code;
 				$return['actionnetwork_add_location'] = $location;
 				$embed_valid = false;
@@ -877,6 +919,9 @@ EOHTML;
 			$return['notices']['error'][] = __('You must enter an embed code or description', 'actionnetwork');
 			$return['errors']['#actionnetwork_add_embed_code'] = true;
 			$return['actionnetwork_add_embed_date'] = $embed_date_string;
+			$return['actionnetwork_add_embed_date_time_hour'] = $embed_date_time_hour;
+			$return['actionnetwork_add_embed_date_time_minutes'] = $embed_date_time_minutes;
+			$return['actionnetwork_add_embed_date_time_ampm'] = $embed_date_time_ampm;
 			$return['actionnetwork_add_embed_title'] = $embed_title;
 			$return['actionnetwork_add_location'] = $location;
 			$embed_valid = false;
@@ -893,6 +938,9 @@ EOHTML;
 		))) {
 			$return['notices']['error'][] = __('This does not seem to be a valid Action Network embed code', 'actionnetwork');
 			$return['actionnetwork_add_embed_date'] = $embed_date_string;
+			$return['actionnetwork_add_embed_date_time_hour'] = $embed_date_time_hour;
+			$return['actionnetwork_add_embed_date_time_minutes'] = $embed_date_time_minutes;
+			$return['actionnetwork_add_embed_date_time_ampm'] = $embed_date_time_ampm;
 			$return['actionnetwork_add_embed_title'] = $embed_title;
 			$return['actionnetwork_add_embed_code'] = $embed_code;
 			$return['actionnetwork_add_location'] = $location;
@@ -931,7 +979,10 @@ EOHTML;
 				'created_date' => time(),
 				'modified_date' => time(),
 			);
-			if ($embed_date_string) { $data['start_date'] = strtotime($embed_date_string); }
+			if ($embed_date_string) {
+				$embed_date_string .= ' '.$embed_date_time_hour.':'.$embed_date_time_minutes.' '.$embed_date_time_ampm;
+				$data['start_date'] = strtotime($embed_date_string);
+			}
 
 
 			$wpdb->insert($table_name, $data, array ( '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%d' ) );
@@ -959,6 +1010,31 @@ EOHTML;
 	}
 	
 	return $return;
+}
+
+/**
+ * Helper functions for dealing with time
+ */
+function _actionnetwork_validate_ampm($text) {
+	return (strtolower($text) == 'pm') ? 'pm' : 'am';
+}
+
+function _actionnetwork_build_time_input($hour = 12, $minutes = 0, $ampm = 'am') {
+	
+	if (strlen($minutes) < 2) { $minutes = '0' . $minutes; }
+	
+	$am_selected = selected( $ampm, 'am', false );
+	$pm_selected = selected( $ampm, 'pm', false );
+	
+	return <<<EOHTML
+	<input name="actionnetwork_add_embed_date_time_hour" id="actionnetwork_add_embed_date_time_hour" type="number" min="1" max="12" step="1" value="$hour" />
+	:
+	<input name="actionnetwork_add_embed_date_time_minutes" id="actionnetwork_add_embed_date_time_minutes" type="number" min="0" max="55" step="5" value="$minutes" onchange="if((this.value.length<2)&&(parseInt(this.value,10)<10))this.value='0'+this.value;" />
+	<select name="actionnetwork_add_embed_date_time_ampm" id="actionnetwork_add_embed_date_time_ampm">
+		<option value="am" $am_selected>am</option>
+		<option value="pm" $pm_selected>pm</option>
+	</select>
+EOHTML;
 }
 
 /**
@@ -1085,7 +1161,6 @@ function actionnetwork_admin_page() {
 				if (isset($action_returns['edit_event_form']) && $action_returns['edit_event_form']) {
 					echo $action_returns['edit_event_form'];
 					echo "</div> <!-- /.wrap-inner -->\n";
-					jk_branding( 'Action Network', 'https://github.com/jkissam/actionnetwork' );
 					echo "</div> <!-- /.wrap -->\n";
 					return;
 				}
@@ -1151,6 +1226,15 @@ function actionnetwork_admin_page() {
 						$actionnetwork_add_embed_date =
 							isset($action_returns['actionnetwork_add_embed_date']) ?
 							$action_returns['actionnetwork_add_embed_date'] : '';
+						$actionnetwork_add_embed_date_time_hour =
+							isset($action_returns['actionnetwork_add_embed_date_time_hour']) ?
+							$action_returns['actionnetwork_add_embed_date_time_hour'] : 12;
+						$actionnetwork_add_embed_date_time_minutes =
+							isset($action_returns['actionnetwork_add_embed_date_time_minutes']) ?
+							$action_returns['actionnetwork_add_embed_date_time_minutes'] : '00';
+						$actionnetwork_add_embed_date_time_ampm =
+							isset($action_returns['actionnetwork_add_embed_date_time_ampm']) ?
+							$action_returns['actionnetwork_add_embed_date_time_ampm'] : 'am';
 						$actionnetwork_add_embed_code =
 							isset($action_returns['actionnetwork_add_embed_code']) ?
 							$action_returns['actionnetwork_add_embed_code'] : '';
@@ -1175,7 +1259,7 @@ function actionnetwork_admin_page() {
 							<td>
 								<input id="actionnetwork_add_embed_date" name="actionnetwork_add_embed_date" type="date" class="required<?php
 									echo (isset($action_returns['errors']['#actionnetwork_add_embed_date']) && $action_returns['errors']['#actionnetwork_add_embed_date']) ? ' error' : '';
-								?>" type="text" value="<?php esc_attr_e($actionnetwork_add_embed_date); ?>" />
+								?>" type="text" value="<?php esc_attr_e($actionnetwork_add_embed_date); ?>" /> <?php echo _actionnetwork_build_time_input( $actionnetwork_add_embed_date_time_hour, $actionnetwork_add_embed_date_time_minutes, $actionnetwork_add_embed_date_time_ampm ); ?>
 							</td>
 						</tr>
 						<tr valign="top">
@@ -1223,7 +1307,6 @@ function actionnetwork_admin_page() {
 		
 		</div> <!-- /.wrap-inner -->
 
-		<?php jk_branding( 'Action Network', 'https://github.com/jkissam/actionnetwork' ); ?>
 
 	</div> <!-- /.wrap -->
 	<?php

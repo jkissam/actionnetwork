@@ -7,7 +7,7 @@ input.error, textarea.error { border: 1px solid #dc3232; color: #dc3232; }
 .nav-tab:focus { box-shadow: none; -webkit-box-shadow: none; -moz-box-shadow: none; color: #555; }
 .actionnetwork-admin-tab { margin: 10px 0; }
 .js .actionnetwork-admin-tab { display: none; }
-.js .actionnetwork-admin-tab-active { display: block; }
+/* .js .actionnetwork-admin-tab-active { display: block; } */
 
 /* copy to clipboard buttons */
 input[type="text"].copy-text { box-shadow: none; -webkit-box-shadow: none; -moz-box-shadow: none; font-family: 'Courier', monospace; background: #fff; vertical-align: middle; margin-right: 0; border-right: none; }

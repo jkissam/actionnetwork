@@ -168,7 +168,6 @@ class ActionNetwork {
 				$this->traverseCollectionPage($endpoint, $response, $callback);
 				$next_page = $this->getNextPage($response);
 			}
-			return $full_simple_collection;
 		}
 	}
 

@@ -14,7 +14,6 @@ jQuery(document).ready(function($){
 	}
 
 	var currentTab = $('.wrap .nav-tab-wrapper .nav-tab-active').attr('href');
-	$('.actionnetwork-admin-tab').hide();
 	$(currentTab).show();
 
 	$('.wrap .nav-tab-wrapper .nav-tab, .wrap h1 .page-title-action').click(function(event){

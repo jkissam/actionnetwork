@@ -3,14 +3,33 @@
 A free Wordpress plugin for the [Action Network](https://actionnetwork.org) online organizing tools, developed by [Jonathan Kissam](http://jonathankissam.com/).
 
 Features:
-* Create a Wordpress shortcode from any Action Network embed code
+* Create a Wordpress shortcode from any Action Network embed code.
 * Manage your saved embed codes using the Wordpress backend. Supports sorting by title, type and last modified date, and provides a search function.
-* If you are an [Action Network Partner](https://actionnetwork.org/partnerships), use your API key to sync all of your actions from Action Network to Wordpress
-* Provides an `actionnetwork_calendar` shortcode and Action Network Calendar widget to show a list of upcoming events. Development of this feature was supported by [The People's Lobby](http://www.thepeopleslobbyusa.org/) - if you like it, please consider [making a donation to them](https://actionnetwork.org/fundraising/donate-to-the-peoples-lobby).
+* Use `[actionnetwork_calendar]` shortcode and Action Network Calendar widget to show a list of upcoming events. Optionally outputs upcoming events in JSON. Development of this feature was supported by [The People's Lobby](http://www.thepeopleslobbyusa.org/) - if you like it, please consider [making a donation to them](https://actionnetwork.org/fundraising/donate-to-the-peoples-lobby).
+* If you are an [Action Network Partner](https://actionnetwork.org/partnerships), use your API key to sync all of your actions from Action Network to Wordpress.
+* Create signup widgets which allow visitors to your site to sign up for your email list _without_ using Action Network javascript embeds. This allows you to place a signup form on every page (for example in the sidebar), and still load Action Network embed codes for actions on particular pages (since Action Network's scripts will only load one embed code per page).  This feature does require the API key, so you have to be an [Action Network Partner](https://actionnetwork.org/partnerships) to use it.
 
 Find this plugin useful? Please consider supporting further development by [hiring me or making a donation](http://jonathankissam.com/support).
 
 ## Updates
+
+_6/28/2017: version 1.0_
+
+Finally, we're ready to release a 1.0 version! Submitted to the Wordpress Directory, at which point documentation will be moved there.
+
+_4/9/2017: version 1.0-beta7_
+
+New feature:
+* json="1" attribute in `[actionnetwork_calendar]` shortcode will output upcoming events as a JSON object called actionNetworkEvents which can then be used by local javascript.
+
+_4/3/2017: version 1.0-beta6_
+
+New features:
+* Add/edit the _time_ as well as date for events added via the text interface
+
+Bug fixes:
+* Prevent Actionnetwork_Sync::processQueue from nesting too many times
+* remove extraneous `return $full_simple_collection` line from `traverseFullCollection` method in actionnetwork.class.php that was generating notices
 
 _3/29/2017: version 1.0-beta5_
 
