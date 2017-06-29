@@ -2,6 +2,8 @@
 
 A free Wordpress plugin for the [Action Network](https://actionnetwork.org) online organizing tools, developed by [Jonathan Kissam](http://jonathankissam.com/).
 
+Latest version available on the [Wordpress.org plugin repository](https://wordpress.org/plugins/wp-action-network/).
+
 Features:
 * Create a Wordpress shortcode from any Action Network embed code.
 * Manage your saved embed codes using the Wordpress backend. Supports sorting by title, type and last modified date, and provides a search function.
@@ -12,6 +14,8 @@ Features:
 Find this plugin useful? Please consider supporting further development by [hiring me or making a donation](http://jonathankissam.com/support).
 
 ## Updates
+
+_6/29/2017: Now available on the Wordpress plugin repository!_
 
 _6/28/2017: version 1.0_
 
