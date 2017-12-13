@@ -2,7 +2,7 @@
 
 A free Wordpress plugin for the [Action Network](https://actionnetwork.org) online organizing tools, developed by [Jonathan Kissam](http://jonathankissam.com/).
 
-Latest version available on the [Wordpress.org plugin repository](https://wordpress.org/plugins/wp-action-network/).
+__Please note that this version is not maintained, will _not_ work with Action Network's v3 embed codes, and may break even more in the future__. Latest version available on the [Wordpress.org plugin repository](https://wordpress.org/plugins/wp-action-network/).
 
 Features:
 * Create a Wordpress shortcode from any Action Network embed code.
